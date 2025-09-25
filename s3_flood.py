@@ -258,122 +258,106 @@ class S3FloodTester:
         total_bytes_uploaded = 0
         file_upload_info = []  # Track individual file upload info (size, time)
         
-        # Create individual progress bars for each file
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+        # Show operation start
+        self.console.print(f"[cyan]Uploading {len(file_list)} files using {self.config['parallel_threads']} parallel threads[/cyan]")
         
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            expand=True
-        ) as progress:
-            main_task = progress.add_task("[cyan]Uploading files...", total=len(file_list))
-            file_tasks = {}
+        # Track file statuses
+        file_statuses = {}  # Track status of each file
+        start_times = {}    # Track start times for each file
+        
+        # Process in batches based on parallel_threads setting
+        batch_size = self.config["parallel_threads"]
+        for i in range(0, len(file_list), batch_size):
+            if not self.running:  # Check if user requested to stop
+                break
+                
+            batch = file_list[i:i+batch_size]
+            self.console.print(f"[dim]Processing batch {i//batch_size + 1}/{(len(file_list)-1)//batch_size + 1} ({len(batch)} files)[/dim]")
             
-            # Process in batches based on parallel_threads setting
-            batch_size = self.config["parallel_threads"]
-            for i in range(0, len(file_list), batch_size):
-                if not self.running:  # Check if user requested to stop
-                    break
-                    
-                batch = file_list[i:i+batch_size]
+            # Start parallel upload processes
+            processes = []
+            for file_path in batch:
+                # Create s5cmd command for upload
+                s3_path = f"s3://{self.config['bucket_name']}/{file_path.name}"
                 
-                # Start parallel upload processes
-                processes = []
-                file_start_times = {}  # Track start times for each file
-                for file_path in batch:
-                    # Create s5cmd command for upload
-                    s3_path = f"s3://{self.config['bucket_name']}/{file_path.name}"
-                    
-                    # Add individual file task
-                    file_size = file_path.stat().st_size if file_path.exists() else 1024 * 1024  # Default 1MB if not exists
-                    file_task = progress.add_task(f"[dim]{file_path.name}[/dim]", total=file_size)
-                    file_tasks[str(file_path)] = file_task
-                    
-                    # Record start time for this file
-                    file_start_times[str(file_path)] = time.time()
-                    
-                    cmd = [
-                        "s5cmd", 
-                        "--endpoint-url", s3_url,
-                        "cp", str(file_path), s3_path
-                    ]
-                    
-                    try:
-                        # Start process without blocking
-                        process = subprocess.Popen(
-                            cmd, 
-                            stdout=subprocess.PIPE, 
-                            stderr=subprocess.PIPE,
-                            env=env
-                        )
-                        processes.append((process, file_path, s3_path, file_start_times[str(file_path)], file_task))
-                    except Exception as e:
-                        failed_files.append((file_path, str(e)))
-                        progress.update(main_task, advance=1)
-                        if str(file_path) in file_tasks:
-                            progress.remove_task(file_tasks[str(file_path)])
+                # Record start time for this file
+                start_times[str(file_path)] = time.time()
+                file_statuses[str(file_path)] = "started"
                 
-                # Poll processes with non-blocking approach
-                completed_processes = []
-                poll_count = 0
-                max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+                # Show file start
+                file_size_mb = file_path.stat().st_size // (1024 * 1024) if file_path.exists() else 0
+                self.console.print(f"[blue]→[/blue] Uploading {file_path.name} ({file_size_mb}MB)")
                 
-                while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
-                    poll_count += 1
-                    for item in processes:
-                        if item in completed_processes:
-                            continue
-                            
-                        process, file_path, s3_path, start_time, file_task = item
+                cmd = [
+                    "s5cmd", 
+                    "--endpoint-url", s3_url,
+                    "cp", str(file_path), s3_path
+                ]
+                
+                try:
+                    # Start process without blocking
+                    process = subprocess.Popen(
+                        cmd, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE,
+                        env=env
+                    )
+                    processes.append((process, file_path, s3_path))
+                except Exception as e:
+                    failed_files.append((file_path, str(e)))
+                    self.console.print(f"[red]✗[/red] {file_path.name} failed to start: {e}")
+            
+            # Poll processes with non-blocking approach
+            completed_processes = []
+            poll_count = 0
+            max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+            
+            while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
+                poll_count += 1
+                for item in processes:
+                    if item in completed_processes:
+                        continue
                         
-                        # Check if process has completed (non-blocking)
-                        if process.poll() is not None:
-                            # Process completed
-                            stdout, stderr = process.communicate()
-                            file_size = file_path.stat().st_size if file_path.exists() else 0
-                            file_upload_time = time.time() - start_time
-                            
-                            if process.returncode == 0:
-                                uploaded_files.append((file_path, s3_path))
-                                # Track bytes for successful uploads
-                                total_bytes_uploaded += file_size
-                                # Track individual file upload info
-                                file_upload_info.append((file_size, file_upload_time))
-                                # Update file progress to complete
-                                if file_path.exists():
-                                    progress.update(file_task, completed=file_size)
-                                self.console.print(f"[green]✓ {file_path.name} uploaded successfully[/green]")
-                            else:
-                                failed_files.append((file_path, stderr.decode() if stderr else "Unknown error"))
-                                # Mark file as failed
-                                progress.update(file_task, completed=0)
-                                self.console.print(f"[red]✗ {file_path.name} failed to upload[/red]")
-                            
-                            completed_processes.append(item)
-                            progress.update(main_task, advance=1)
-                            # Remove individual file task
-                            if str(file_path) in file_tasks:
-                                progress.remove_task(file_tasks[str(file_path)])
+                    process, file_path, s3_path = item
                     
-                    # Small delay to prevent busy waiting
-                    time.sleep(0.1)
+                    # Check if process has completed (non-blocking)
+                    if process.poll() is not None:
+                        # Process completed
+                        stdout, stderr = process.communicate()
+                        file_size = file_path.stat().st_size if file_path.exists() else 0
+                        file_upload_time = time.time() - start_times[str(file_path)]
+                        
+                        if process.returncode == 0:
+                            uploaded_files.append((file_path, s3_path))
+                            # Track bytes for successful uploads
+                            total_bytes_uploaded += file_size
+                            # Track individual file upload info
+                            file_upload_info.append((file_size, file_upload_time))
+                            file_statuses[str(file_path)] = "completed"
+                            
+                            # Calculate speed
+                            speed_mbps = (file_size / (1024 * 1024)) / file_upload_time if file_upload_time > 0 else 0
+                            file_size_mb = file_size // (1024 * 1024)
+                            self.console.print(f"[green]✓[/green] {file_path.name} uploaded successfully ({file_size_mb}MB in {file_upload_time:.1f}s, {speed_mbps:.1f}MB/s)")
+                        else:
+                            failed_files.append((file_path, stderr.decode() if stderr else "Unknown error"))
+                            file_statuses[str(file_path)] = "failed"
+                            self.console.print(f"[red]✗[/red] {file_path.name} failed to upload")
+                        
+                        completed_processes.append(item)
                 
-                # Check if we hit the polling limit
-                if poll_count >= max_polls:
-                    for item in processes:
-                        if item not in completed_processes:
-                            process, file_path, s3_path, start_time, file_task = item
-                            process.kill()  # Kill the process
-                            failed_files.append((file_path, "Timeout - process killed"))
-                            self.console.print(f"[red]✗ {file_path.name} timed out and was killed[/red]")
-                            progress.update(main_task, advance=1)
-                            # Remove individual file task
-                            if str(file_path) in file_tasks:
-                                progress.remove_task(file_tasks[str(file_path)])
-                    
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)
+            
+            # Check if we hit the polling limit
+            if poll_count >= max_polls:
+                for item in processes:
+                    if item not in completed_processes:
+                        process, file_path, s3_path = item
+                        process.kill()  # Kill the process
+                        failed_files.append((file_path, "Timeout - process killed"))
+                        self.console.print(f"[red]✗[/red] {file_path.name} timed out and was killed")
+        
         cycle_elapsed_time = time.time() - cycle_start_time
         
         # Update stats
@@ -401,131 +385,105 @@ class S3FloodTester:
         env["AWS_ACCESS_KEY_ID"] = self.config["access_key"]
         env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
         
-        # Create individual progress bars for each file
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+        # Show operation start
+        self.console.print(f"[cyan]Reading {len(s3_file_paths)} files using {self.config['parallel_threads']} parallel threads[/cyan]")
         
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            expand=True
-        ) as progress:
-            main_task = progress.add_task("[blue]Reading files...", total=len(s3_file_paths))
-            file_tasks = {}
+        # Track file statuses
+        file_statuses = {}  # Track status of each file
+        start_times = {}    # Track start times for each file
+        
+        # Process in batches
+        batch_size = self.config["parallel_threads"]
+        for i in range(0, len(s3_file_paths), batch_size):
+            if not self.running:  # Check if user requested to stop
+                break
+                
+            batch = s3_file_paths[i:i+batch_size]
+            self.console.print(f"[dim]Processing batch {i//batch_size + 1}/{(len(s3_file_paths)-1)//batch_size + 1} ({len(batch)} files)[/dim]")
             
-            # Process in batches
-            batch_size = self.config["parallel_threads"]
-            for i in range(0, len(s3_file_paths), batch_size):
-                if not self.running:  # Check if user requested to stop
-                    break
-                    
-                batch = s3_file_paths[i:i+batch_size]
+            # Start parallel read processes
+            processes = []
+            for s3_path in batch:
+                file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
                 
-                # Start parallel read processes
-                processes = []
-                file_start_times = {}  # Track start times for each file
-                for s3_path in batch:
-                    file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
-                    
-                    # Add individual file task (we'll simulate progress since we're reading to /dev/null)
-                    file_task = progress.add_task(f"[dim]{file_name}[/dim]", total=100)
-                    file_tasks[s3_path] = file_task
-                    
-                    # Record start time for this file
-                    file_start_times[s3_path] = time.time()
-                    
-                    # Use cat command to read file content (simulates download without storing)
-                    cmd = [
-                        "s5cmd",
-                        "--endpoint-url", s3_url,
-                        "cat", s3_path
-                    ]
-                    
-                    try:
-                        # Start process without blocking
-                        process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.DEVNULL,  # Discard output
-                            stderr=subprocess.PIPE,
-                            env=env
-                        )
-                        processes.append((process, s3_path, file_name, file_start_times[s3_path], file_task))
-                    except Exception as e:
-                        failed_files.append((s3_path, str(e)))
-                        progress.update(main_task, advance=1)
-                        if s3_path in file_tasks:
-                            progress.remove_task(file_tasks[s3_path])
+                # Record start time for this file
+                start_times[s3_path] = time.time()
+                file_statuses[s3_path] = "started"
                 
-                # Poll processes with non-blocking approach
-                completed_processes = []
-                poll_count = 0
-                max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+                # Show file start
+                self.console.print(f"[blue]→[/blue] Reading {file_name}")
                 
-                while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
-                    poll_count += 1
-                    for item in processes:
-                        if item in completed_processes:
-                            continue
-                            
-                        process, s3_path, file_name, start_time, file_task = item
+                # Use cat command to read file content (simulates download without storing)
+                cmd = [
+                    "s5cmd",
+                    "--endpoint-url", s3_url,
+                    "cat", s3_path
+                ]
+                
+                try:
+                    # Start process without blocking
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,  # Discard output
+                        stderr=subprocess.PIPE,
+                        env=env
+                    )
+                    processes.append((process, s3_path, file_name))
+                except Exception as e:
+                    failed_files.append((s3_path, str(e)))
+                    self.console.print(f"[red]✗[/red] {file_name} failed to start: {e}")
+            
+            # Poll processes with non-blocking approach
+            completed_processes = []
+            poll_count = 0
+            max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+            
+            while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
+                poll_count += 1
+                for item in processes:
+                    if item in completed_processes:
+                        continue
                         
-                        # Check if process has completed (non-blocking)
-                        if process.poll() is not None:
-                            # Process completed
-                            stdout, stderr = process.communicate()
-                            file_download_time = time.time() - start_time
-                            
-                            # For read operations, we consider it successful if the process completes
-                            if process.returncode == 0:
-                                downloaded_files.append(s3_path)
-                                # Mark file as completed
-                                progress.update(file_task, completed=100)
-                                self.console.print(f"[green]✓ {file_name} read successfully[/green]")
-                            else:
-                                # Only consider it a failure if there's an actual error
-                                error_output = stderr.decode().strip() if stderr else ""
-                                if error_output and "no such file" not in error_output.lower():
-                                    failed_files.append((s3_path, error_output))
-                                    # Mark file as failed
-                                    progress.update(file_task, completed=0)
-                                    self.console.print(f"[red]✗ {file_name} failed to read[/red]")
-                                else:
-                                    # If it's just a "no such file" error or no error, still count as downloaded
-                                    downloaded_files.append(s3_path)
-                                    # Mark file as completed
-                                    progress.update(file_task, completed=100)
-                                    self.console.print(f"[green]✓ {file_name} read successfully[/green]")
-                            
-                            completed_processes.append(item)
-                            progress.update(main_task, advance=1)
-                            # Remove individual file task
-                            if s3_path in file_tasks:
-                                progress.remove_task(file_tasks[s3_path])
+                    process, s3_path, file_name = item
+                    
+                    # Check if process has completed (non-blocking)
+                    if process.poll() is not None:
+                        # Process completed
+                        stdout, stderr = process.communicate()
+                        file_download_time = time.time() - start_times[s3_path]
+                        
+                        # For read operations, we consider it successful if the process completes
+                        if process.returncode == 0:
+                            downloaded_files.append(s3_path)
+                            file_statuses[s3_path] = "completed"
+                            self.console.print(f"[green]✓[/green] {file_name} read successfully ({file_download_time:.1f}s)")
                         else:
-                            # Update progress for ongoing downloads (simulate progress)
-                            progress.update(file_task, advance=1)
-                            # Reset to 0 if we've reached 100 to create a looping effect
-                            if progress.tasks[file_task].completed >= 100:
-                                progress.reset(file_task)
-                    
-                    # Small delay to prevent busy waiting
-                    time.sleep(0.1)
+                            # Only consider it a failure if there's an actual error
+                            error_output = stderr.decode().strip() if stderr else ""
+                            if error_output and "no such file" not in error_output.lower():
+                                failed_files.append((s3_path, error_output))
+                                file_statuses[s3_path] = "failed"
+                                self.console.print(f"[red]✗[/red] {file_name} failed to read")
+                            else:
+                                # If it's just a "no such file" error or no error, still count as downloaded
+                                downloaded_files.append(s3_path)
+                                file_statuses[s3_path] = "completed"
+                                self.console.print(f"[green]✓[/green] {file_name} read successfully ({file_download_time:.1f}s)")
+                        
+                        completed_processes.append(item)
                 
-                # Check if we hit the polling limit
-                if poll_count >= max_polls:
-                    for item in processes:
-                        if item not in completed_processes:
-                            process, s3_path, file_name, start_time, file_task = item
-                            process.kill()  # Kill the process
-                            failed_files.append((s3_path, "Timeout - process killed"))
-                            self.console.print(f"[red]✗ {file_name} timed out and was killed[/red]")
-                            progress.update(main_task, advance=1)
-                            # Remove individual file task
-                            if s3_path in file_tasks:
-                                progress.remove_task(file_tasks[s3_path])
-                    
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)
+            
+            # Check if we hit the polling limit
+            if poll_count >= max_polls:
+                for item in processes:
+                    if item not in completed_processes:
+                        process, s3_path, file_name = item
+                        process.kill()  # Kill the process
+                        failed_files.append((s3_path, "Timeout - process killed"))
+                        self.console.print(f"[red]✗[/red] {file_name} timed out and was killed")
+        
         cycle_elapsed_time = time.time() - cycle_start_time
         
         # Update stats
@@ -552,120 +510,95 @@ class S3FloodTester:
         env["AWS_ACCESS_KEY_ID"] = self.config["access_key"]
         env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
         
-        # Create individual progress bars for each file
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+        # Show operation start
+        self.console.print(f"[cyan]Deleting {len(s3_file_paths)} files using {self.config['parallel_threads']} parallel threads[/cyan]")
         
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            expand=True
-        ) as progress:
-            main_task = progress.add_task("[red]Deleting files...", total=len(s3_file_paths))
-            file_tasks = {}
+        # Track file statuses
+        file_statuses = {}  # Track status of each file
+        start_times = {}    # Track start times for each file
+        
+        # Process in batches
+        batch_size = self.config["parallel_threads"]
+        for i in range(0, len(s3_file_paths), batch_size):
+            if not self.running:  # Check if user requested to stop
+                break
+                
+            batch = s3_file_paths[i:i+batch_size]
+            self.console.print(f"[dim]Processing batch {i//batch_size + 1}/{(len(s3_file_paths)-1)//batch_size + 1} ({len(batch)} files)[/dim]")
             
-            # Process in batches
-            batch_size = self.config["parallel_threads"]
-            for i in range(0, len(s3_file_paths), batch_size):
-                if not self.running:  # Check if user requested to stop
-                    break
-                    
-                batch = s3_file_paths[i:i+batch_size]
+            # Start parallel delete processes
+            processes = []
+            for s3_path in batch:
+                file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
                 
-                # Start parallel delete processes
-                processes = []
-                file_start_times = {}  # Track start times for each file
-                for s3_path in batch:
-                    file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
-                    
-                    # Add individual file task
-                    file_task = progress.add_task(f"[dim]{file_name}[/dim]", total=100)
-                    file_tasks[s3_path] = file_task
-                    
-                    # Record start time for this file
-                    file_start_times[s3_path] = time.time()
-                    
-                    cmd = [
-                        "s5cmd",
-                        "--endpoint-url", s3_url,
-                        "rm", s3_path
-                    ]
-                    
-                    try:
-                        # Start process without blocking
-                        process = subprocess.Popen(
-                            cmd,
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            env=env
-                        )
-                        processes.append((process, s3_path, file_name, file_start_times[s3_path], file_task))
-                    except Exception as e:
-                        failed_files.append((s3_path, str(e)))
-                        progress.update(main_task, advance=1)
-                        if s3_path in file_tasks:
-                            progress.remove_task(file_tasks[s3_path])
+                # Record start time for this file
+                start_times[s3_path] = time.time()
+                file_statuses[s3_path] = "started"
                 
-                # Poll processes with non-blocking approach
-                completed_processes = []
-                poll_count = 0
-                max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+                # Show file start
+                self.console.print(f"[blue]→[/blue] Deleting {file_name}")
                 
-                while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
-                    poll_count += 1
-                    for item in processes:
-                        if item in completed_processes:
-                            continue
-                            
-                        process, s3_path, file_name, start_time, file_task = item
+                cmd = [
+                    "s5cmd",
+                    "--endpoint-url", s3_url,
+                    "rm", s3_path
+                ]
+                
+                try:
+                    # Start process without blocking
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=env
+                    )
+                    processes.append((process, s3_path, file_name))
+                except Exception as e:
+                    failed_files.append((s3_path, str(e)))
+                    self.console.print(f"[red]✗[/red] {file_name} failed to start: {e}")
+            
+            # Poll processes with non-blocking approach
+            completed_processes = []
+            poll_count = 0
+            max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+            
+            while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
+                poll_count += 1
+                for item in processes:
+                    if item in completed_processes:
+                        continue
                         
-                        # Check if process has completed (non-blocking)
-                        if process.poll() is not None:
-                            # Process completed
-                            stdout, stderr = process.communicate()
-                            file_delete_time = time.time() - start_time
-                            
-                            if process.returncode == 0:
-                                deleted_files.append(s3_path)
-                                # Mark file as completed
-                                progress.update(file_task, completed=100)
-                                self.console.print(f"[green]✓ {file_name} deleted successfully[/green]")
-                            else:
-                                failed_files.append((s3_path, stderr.decode() if stderr else "Unknown error"))
-                                # Mark file as failed
-                                progress.update(file_task, completed=0)
-                                self.console.print(f"[red]✗ {file_name} failed to delete[/red]")
-                            
-                            completed_processes.append(item)
-                            progress.update(main_task, advance=1)
-                            # Remove individual file task
-                            if s3_path in file_tasks:
-                                progress.remove_task(file_tasks[s3_path])
+                    process, s3_path, file_name = item
+                    
+                    # Check if process has completed (non-blocking)
+                    if process.poll() is not None:
+                        # Process completed
+                        stdout, stderr = process.communicate()
+                        file_delete_time = time.time() - start_times[s3_path]
+                        
+                        if process.returncode == 0:
+                            deleted_files.append(s3_path)
+                            file_statuses[s3_path] = "completed"
+                            self.console.print(f"[green]✓[/green] {file_name} deleted successfully ({file_delete_time:.1f}s)")
                         else:
-                            # Update progress for ongoing deletions (simulate progress)
-                            progress.update(file_task, advance=2)
-                            # Reset to 0 if we've reached 100 to create a looping effect
-                            if progress.tasks[file_task].completed >= 100:
-                                progress.reset(file_task)
-                    
-                    # Small delay to prevent busy waiting
-                    time.sleep(0.1)
+                            failed_files.append((s3_path, stderr.decode() if stderr else "Unknown error"))
+                            file_statuses[s3_path] = "failed"
+                            self.console.print(f"[red]✗[/red] {file_name} failed to delete")
+                        
+                        completed_processes.append(item)
                 
-                # Check if we hit the polling limit
-                if poll_count >= max_polls:
-                    for item in processes:
-                        if item not in completed_processes:
-                            process, s3_path, file_name, start_time, file_task = item
-                            process.kill()  # Kill the process
-                            failed_files.append((s3_path, "Timeout - process killed"))
-                            self.console.print(f"[red]✗ {file_name} timed out and was killed[/red]")
-                            progress.update(main_task, advance=1)
-                            # Remove individual file task
-                            if s3_path in file_tasks:
-                                progress.remove_task(file_tasks[s3_path])
-                    
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)
+            
+            # Check if we hit the polling limit
+            if poll_count >= max_polls:
+                for item in processes:
+                    if item not in completed_processes:
+                        process, s3_path, file_name = item
+                        process.kill()  # Kill the process
+                        failed_files.append((s3_path, "Timeout - process killed"))
+                        self.console.print(f"[red]✗[/red] {file_name} timed out and was killed")
+        
         cycle_elapsed_time = time.time() - cycle_start_time
         
         # Update stats
