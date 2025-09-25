@@ -1,115 +1,121 @@
 #!/usr/bin/env python3
 """
-Simple S3 connection test script for debugging s5cmd connectivity
+Test S3 connection with provided credentials
 """
 
 import os
 import sys
 import subprocess
-from rich.console import Console
+import time
+from pathlib import Path
 
 def test_s3_connection():
-    console = Console()
+    """Test S3 connection with provided credentials"""
+    # Get credentials from environment variables or use placeholders
+    access_key = os.environ.get("AWS_ACCESS_KEY_ID", "YOUR_ACCESS_KEY")
+    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "YOUR_SECRET_KEY")
     
-    # Get configuration from environment or use defaults
-    s3_url = os.environ.get("S3_URL", "https://kazan.archive.systems:9080")
-    access_key = os.environ.get("AWS_ACCESS_KEY_ID", "MLAn0-sy5uv5qebve9dUQFEL")
-    secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY", "mwr3EBGY5SDO2eEft_r6m5KfPDSPFoRzv12JFQO_")
-    bucket_name = os.environ.get("S3_BUCKET", "backup")
+    # Configuration
+    config_file = "config.yaml"
     
-    console.print(f"[bold blue]Testing S3 Connection[/bold blue]")
-    console.print(f"Endpoint: {s3_url}")
-    console.print(f"Bucket: {bucket_name}")
-    console.print(f"Access Key: {access_key[:5]}... (hidden)")
-    console.print("")
+    # Try to read from config file if it exists
+    if Path(config_file).exists():
+        try:
+            import yaml
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f)
+                if 'access_key' in config:
+                    access_key = config['access_key']
+                if 'secret_key' in config:
+                    secret_key = config['secret_key']
+                if 's3_urls' in config and config['s3_urls']:
+                    s3_url = config['s3_urls'][0]
+                else:
+                    s3_url = "http://localhost:9000"
+                if 'bucket_name' in config:
+                    bucket_name = config['bucket_name']
+                else:
+                    bucket_name = "test-bucket"
+        except Exception as e:
+            print(f"Error reading config file: {e}")
+            s3_url = "http://localhost:9000"
+            bucket_name = "test-bucket"
+    else:
+        s3_url = "http://localhost:9000"
+        bucket_name = "test-bucket"
+    
+    print("=== S3 Connection Test ===")
+    print(f"S3 URL: {s3_url}")
+    print(f"Access Key: {access_key[:5]}...")  # Show only first 5 characters
+    print(f"Secret Key length: {len(secret_key)} characters")
+    print(f"Bucket: {bucket_name}")
+    print(f"Timeout: 30 seconds")
     
     # Set environment variables for s5cmd
     env = os.environ.copy()
     env["AWS_ACCESS_KEY_ID"] = access_key
     env["AWS_SECRET_ACCESS_KEY"] = secret_key
     
-    # Test 1: Check if s5cmd is available
-    console.print("[cyan]Test 1: Checking if s5cmd is available...[/cyan]")
+    # Test s5cmd availability
+    print("\nChecking if s5cmd is available...")
     try:
-        result = subprocess.run(["s5cmd", "version"], 
+        result = subprocess.run(["s5cmd", "--help"], 
                               capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
-            console.print(f"[green]✓ s5cmd is available: {result.stdout.strip()}[/green]")
+            print("✓ s5cmd is available")
         else:
-            console.print(f"[red]✗ s5cmd not found or not working[/red]")
+            print("✗ s5cmd not found or not working")
             return False
     except FileNotFoundError:
-        console.print(f"[red]✗ s5cmd not found in PATH[/red]")
+        print("✗ s5cmd not found. Please install s5cmd first.")
         return False
-    except Exception as e:
-        console.print(f"[red]✗ Error checking s5cmd: {e}[/red]")
+    except subprocess.TimeoutExpired:
+        print("✗ s5cmd test timed out")
         return False
     
-    # Test 2: List buckets
-    console.print("[cyan]Test 2: Listing buckets...[/cyan]")
-    cmd = ["s5cmd", "--endpoint-url", s3_url, "ls"]
-    console.print(f"[dim]Command: {' '.join(cmd)}[/dim]")
+    # Test S3 connection
+    print(f"\nTesting S3 connection to {s3_url}...")
+    cmd = [
+        "s5cmd", 
+        "--endpoint-url", s3_url,
+        "ls"
+    ]
+    
+    print("Executing: s5cmd --endpoint-url {} ls".format(s3_url))
     
     try:
+        start_time = time.time()
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
+        end_time = time.time()
+        
+        print(f"Command completed in {end_time - start_time:.2f} seconds")
+        print(f"Return code: {result.returncode}")
+        
         if result.returncode == 0:
-            console.print(f"[green]✓ Successfully listed buckets[/green]")
-            if result.stdout.strip():
-                console.print(f"[dim]Buckets:[/dim]")
-                for line in result.stdout.strip().split('\n'):
-                    console.print(f"  [dim]{line}[/dim]")
-            else:
-                console.print(f"[dim]No buckets found[/dim]")
-        else:
-            console.print(f"[red]✗ Failed to list buckets (return code: {result.returncode})[/red]")
-            console.print(f"[red]STDERR: {result.stderr}[/red]")
+            print("✓ S3 connection successful!")
             if result.stdout:
-                console.print(f"[yellow]STDOUT: {result.stdout}[/yellow]")
+                print("Output:")
+                print(result.stdout)
+            return True
+        else:
+            print("✗ S3 connection failed!")
+            if result.stderr:
+                print("STDERR:")
+                print(result.stderr)
             return False
+            
     except subprocess.TimeoutExpired:
-        console.print(f"[red]✗ s5cmd timed out after 30 seconds[/red]")
+        print("✗ s5cmd test timed out after 30 seconds. Check your network connection.")
         return False
     except Exception as e:
-        console.print(f"[red]✗ Error listing buckets: {e}[/red]")
+        print(f"✗ Error testing S3 connection: {e}")
         return False
-    
-    # Test 3: List objects in the specific bucket
-    console.print("[cyan]Test 3: Listing objects in bucket...[/cyan]")
-    s3_path = f"s3://{bucket_name}"
-    cmd = ["s5cmd", "--endpoint-url", s3_url, "ls", s3_path]
-    console.print(f"[dim]Command: {' '.join(cmd)}[/dim]")
-    
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
-        if result.returncode == 0:
-            console.print(f"[green]✓ Successfully listed objects in bucket[/green]")
-            if result.stdout.strip():
-                lines = result.stdout.strip().split('\n')
-                console.print(f"[dim]Found {len(lines)} objects:[/dim]")
-                # Show first 5 objects
-                for line in lines[:5]:
-                    console.print(f"  [dim]{line}[/dim]")
-                if len(lines) > 5:
-                    console.print(f"  [dim]... and {len(lines) - 5} more objects[/dim]")
-            else:
-                console.print(f"[dim]Bucket is empty[/dim]")
-        else:
-            console.print(f"[yellow]⚠ Failed to list objects in bucket (return code: {result.returncode})[/yellow]")
-            console.print(f"[yellow]STDERR: {result.stderr}[/yellow]")
-            if result.stdout:
-                console.print(f"[dim]STDOUT: {result.stdout}[/dim]")
-            # This is not necessarily a failure - the bucket might be empty
-    except subprocess.TimeoutExpired:
-        console.print(f"[red]✗ s5cmd timed out after 30 seconds[/red]")
-        return False
-    except Exception as e:
-        console.print(f"[red]✗ Error listing objects: {e}[/red]")
-        return False
-    
-    console.print("")
-    console.print("[bold green]All tests completed successfully![/bold green]")
-    console.print("[green]S3 connection is working properly.[/green]")
-    return True
 
 if __name__ == "__main__":
-    test_s3_connection()
+    success = test_s3_connection()
+    if success:
+        print("\n✓ All tests passed!")
+        sys.exit(0)
+    else:
+        print("\n✗ s5cmd setup failed")
+        sys.exit(1)

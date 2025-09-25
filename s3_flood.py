@@ -43,6 +43,7 @@ class S3FloodTester:
             "upload_times": []  # Track individual upload times for better speed calculation
         }
         self.running = True
+        # Use test_files_directory from config or default to "./s3_temp_files"
         self.local_temp_dir = Path("./s3_temp_files")
         
         # Register signal handler for graceful shutdown
@@ -57,8 +58,8 @@ class S3FloodTester:
         """Load configuration from YAML file"""
         default_config = {
             "s3_urls": ["http://localhost:9000"],
-            "access_key": "minioadmin",
-            "secret_key": "minioadmin",
+            "access_key": "YOUR_ACCESS_KEY_HERE",
+            "secret_key": "YOUR_SECRET_KEY_HERE",
             "bucket_name": "test-bucket",
             "cluster_mode": False,
             "parallel_threads": 5,
@@ -68,7 +69,8 @@ class S3FloodTester:
                 "large": {"max_size_mb": 20480, "count": 10}   # 20GB
             },
             "infinite_loop": True,
-            "cycle_delay_seconds": 15
+            "cycle_delay_seconds": 15,
+            "test_files_directory": "./s3_temp_files"
         }
         
         try:
@@ -78,6 +80,9 @@ class S3FloodTester:
                 for key, value in default_config.items():
                     if key not in self.config:
                         self.config[key] = value
+                        
+            # Set local_temp_dir from config
+            self.local_temp_dir = Path(self.config["test_files_directory"])
         except FileNotFoundError:
             self.console.print(f"[yellow]Config file {config_path} not found. Creating default config.[/yellow]")
             self.config = default_config
@@ -86,6 +91,9 @@ class S3FloodTester:
             self.console.print(f"[red]Error parsing config file: {e}[/red]")
             self.config = default_config
             
+        # Set local_temp_dir from config
+        self.local_temp_dir = Path(self.config["test_files_directory"])
+
     def save_config(self, config_path: str = "config.yaml"):
         """Save current configuration to YAML file"""
         try:
@@ -142,9 +150,10 @@ class S3FloodTester:
             
     def create_test_files(self) -> List[Path]:
         """Create test files of different sizes"""
+        # Use directory from config
         if self.local_temp_dir.exists():
             shutil.rmtree(self.local_temp_dir)
-        self.local_temp_dir.mkdir(exist_ok=True)
+        self.local_temp_dir.mkdir(exist_ok=True, parents=True)
         
         file_list = []
         

@@ -1,22 +1,20 @@
 #!/bin/bash
 
-# Test S3 connection with proper credentials
-export AWS_ACCESS_KEY_ID="MLAn0-sy5uv5qebve9dUQFEL"
-export AWS_SECRET_ACCESS_KEY="mwr3EBGY5SDO2eEft_r6m5KfPDSPFoRzv12JFQO_"
+# Test script with credentials
+# Set your S3 credentials here or export them in your environment
 
-echo "Testing s5cmd with credentials..."
-echo "Endpoint: http://kazan.archive.systems:9080 (note: HTTP, not HTTPS)"
-echo "Bucket: backup"
-echo ""
+export AWS_ACCESS_KEY_ID="YOUR_ACCESS_KEY"
+export AWS_SECRET_ACCESS_KEY="YOUR_SECRET_KEY"
 
-echo "1. Checking s5cmd version:"
-s5cmd version
-echo ""
+# Configuration
+S3_URL="http://localhost:9000"
+BUCKET_NAME="test-bucket"
 
-echo "2. Listing buckets:"
-s5cmd --endpoint-url http://kazan.archive.systems:9080 ls
-echo ""
+echo "=== S3 Flood Test with Credentials ==="
+echo "S3 URL: $S3_URL"
+echo "Access Key: ${AWS_ACCESS_KEY_ID:0:5}..."  # Show only first 5 characters
+echo "Secret Key length: ${#AWS_SECRET_ACCESS_KEY} characters"
+echo "Bucket: $BUCKET_NAME"
 
-echo "3. Listing objects in backup bucket:"
-s5cmd --endpoint-url http://kazan.archive.systems:9080 ls s3://backup/
-echo ""
+# Run the test
+python3 run_test.py

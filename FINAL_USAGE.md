@@ -1,92 +1,84 @@
-# Финальное руководство по использованию S3 Flood
+When you ran the application and saw "silence" after the line "Testing S3 connection to http://localhost:9000...", it happened for several reasons:
 
-## Проблема, которую вы заметили
+1. **Network Issues**: The application couldn't connect to the S3 endpoint. Check:
+   - Is your S3 service running?
+   - Are the endpoint URL and port correct?
+   - Do you have network connectivity to the S3 service?
 
-Когда вы запускали приложение и видели "тишину" после строки "Testing S3 connection to https://kazan.archive.systems:9080...", это происходило по нескольким причинам:
+2. **Authentication Problems**: The credentials might be incorrect. Check:
+   - Are the access key and secret key correct?
+   - Do the credentials have the necessary permissions?
 
-1. **Неправильный протокол**: Сервер работает по HTTP, а не по HTTPS
-2. **Отсутствие обратной связи**: Приложение не показывало прогресс операций
-3. **Проблемы с чтением файлов**: Использование `/dev/null` вызывало ошибки в s5cmd
+3. **DNS Resolution**: The hostname might not be resolvable. Check:
+   - Can you resolve the hostname with `nslookup` or `dig`?
+   - Is there a typo in the URL?
 
-## Что было исправлено
+## Solution
 
-### 1. Улучшен вывод информации
-Теперь приложение показывает:
-- Что происходит на каждом этапе
-- Сколько файлов создается/загружается/читается/удаляется
-- Прогресс выполнения операций
-- Результаты каждой операции (успех/ошибка)
+To fix these issues:
 
-### 2. Исправлена проблема с протоколом
-Приложение теперь правильно работает с HTTP-серверами.
+1. **Check your S3 service**:
+   ```bash
+   # If using MinIO
+   mc admin info local
+   
+   # Or check if the service is listening
+   netstat -tlnp | grep :9000
+   ```
 
-### 3. Исправлена проблема с чтением файлов
-Вместо команды `cp file /dev/null` теперь используется команда `cat file`, которая правильно читает содержимое файла и отбрасывает вывод.
+2. **Verify credentials**:
+   ```bash
+   # Test with AWS CLI
+   aws --endpoint-url http://localhost:9000 s3 ls
+   ```
 
-## Как использовать приложение
+3. **Update your configuration**:
+   ```yaml
+   s3_urls:
+     - "http://localhost:9000"  # Use HTTP, not HTTPS
+   access_key: "YOUR_ACCESS_KEY"
+   secret_key: "YOUR_SECRET_KEY"
+   bucket_name: "test-bucket"
+   ```
 
-### 1. Настройка конфигурации
-Отредактируйте файл `config.yaml`:
+## Example Configuration
+
+Here's a complete example configuration:
+
 ```yaml
 s3_urls:
-  - "http://kazan.archive.systems:9080"  # Используйте HTTP, не HTTPS
-access_key: "MLAn0-sy5uv5qebve9dUQFEL"
-secret_key: "mwr3EBGY5SDO2eEft_r6m5KfPDSPFoRzv12JFQO_"
-bucket_name: "backup"
+  - http://localhost:9000        # S3 endpoint URLs
+access_key: YOUR_ACCESS_KEY     # Access key
+secret_key: YOUR_SECRET_KEY     # Secret key
+bucket_name: test-bucket        # Bucket name
+cluster_mode: false             # Cluster mode (multiple endpoints)
+parallel_threads: 5             # Number of parallel threads
+file_groups:
+  small:
+    max_size_mb: 100            # Max size for small files (MB)
+    count: 100                  # Number of small files
+  medium:
+    max_size_mb: 5120           # Max size for medium files (MB)
+    count: 50                   # Number of medium files
+  large:
+    max_size_mb: 20480          # Max size for large files (MB)
+    count: 10                   # Number of large files
+infinite_loop: true             # Run in infinite loop
+cycle_delay_seconds: 15         # Delay between cycles (seconds)
 ```
 
-### 2. Запуск приложения
-```bash
-python s3_flood.py
-```
+## Testing the Connection
 
-### 3. Выбор режима работы
-- **Configure**: Настройка параметров подключения
-- **Run Test**: Запуск теста
-- **View Statistics**: Просмотр статистики
-- **Exit**: Выход
+To test your configuration:
 
-## Что делает приложение
+1. Run the connection test script:
+   ```bash
+   python test_s3_connection.py
+   ```
 
-1. **Создание тестовых файлов**: Генерирует файлы трех размеров
-2. **Загрузка в S3**: Параллельная загрузка файлов
-3. **Чтение из S3**: Параллельное чтение файлов (симуляция скачивания)
-4. **Удаление из S3**: Параллельное удаление файлов
-5. **Сбор статистики**: Подсчет времени и количества операций
+2. Or run the application in configuration mode:
+   ```bash
+   python s3_flood.py --config
+   ```
 
-## Режимы работы
-
-### Обычный режим
-Один цикл тестирования: создание → загрузка → чтение → удаление
-
-### Бесконечный режим
-Непрерывное выполнение циклов с задержкой между ними
-
-## Мониторинг
-
-Приложение показывает:
-- Количество завершенных циклов
-- Количество операций по каждому типу
-- Среднее время на операцию
-- Общее время выполнения
-
-## Устранение неполадок
-
-### Если подключение не работает:
-1. Проверьте правильность URL (HTTP вместо HTTPS)
-2. Проверьте учетные данные
-3. Убедитесь, что s5cmd установлен (`s5cmd version`)
-
-### Если операции не выполняются:
-1. Проверьте, что бакет существует
-2. Убедитесь, что у вас есть права на запись/чтение/удаление
-3. Проверьте сетевое соединение
-
-### Для отладки используйте тестовые скрипты:
-```bash
-# Проверка подключения
-./test_with_creds.sh
-
-# Запуск маленького теста
-python run_test.py
-```
+This will help you identify and fix connection issues before running the full test.
