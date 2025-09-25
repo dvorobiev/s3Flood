@@ -103,6 +103,19 @@ class S3FloodTester:
         except Exception as e:
             self.console.print(f"[red]Error saving config: {e}[/red]")
             
+    def _get_s3_url(self) -> str:
+        """Get S3 URL based on cluster mode configuration.
+        
+        In cluster mode, randomly selects one of the configured URLs.
+        In single mode, always returns the first URL.
+        """
+        if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+            # In cluster mode, randomly select one of the URLs
+            return random.choice(self.config["s3_urls"])
+        else:
+            # In single mode or if only one URL is configured, use the first one
+            return self.config["s3_urls"][0]
+            
     def setup_s5cmd(self):
         """Setup s5cmd with provided credentials"""
         try:
@@ -114,7 +127,7 @@ class S3FloodTester:
                 return False
                 
             # Test S3 connection with provided credentials using environment variables
-            s3_url = self.config["s3_urls"][0]
+            s3_url = self._get_s3_url()  # Use cluster-aware URL selection
             
             # Set environment variables for s5cmd
             env = os.environ.copy()
@@ -246,8 +259,8 @@ class S3FloodTester:
         uploaded_files = []
         failed_files = []
         
-        # For cluster mode, we might want to use different endpoints
-        s3_url = self.config["s3_urls"][0]  # Use first URL for now
+        # Get initial URL for this operation
+        s3_url = self._get_s3_url()
         
         # Set environment variables for s5cmd
         env = os.environ.copy()
@@ -260,6 +273,8 @@ class S3FloodTester:
         
         # Show operation start
         self.console.print(f"[cyan]Uploading {len(file_list)} files using {self.config['parallel_threads']} parallel threads[/cyan]")
+        if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+            self.console.print(f"[dim]Cluster mode: Using random endpoints from {len(self.config['s3_urls'])} configured URLs[/dim]")
         
         # Track file statuses
         file_statuses = {}  # Track status of each file
@@ -272,7 +287,11 @@ class S3FloodTester:
                 break
                 
             batch = file_list[i:i+batch_size]
-            self.console.print(f"[dim]Processing batch {i//batch_size + 1}/{(len(file_list)-1)//batch_size + 1} ({len(batch)} files)[/dim]")
+            
+            # In cluster mode, potentially use a different endpoint for each batch
+            if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+                s3_url = self._get_s3_url()
+                self.console.print(f"[dim]Batch {i//batch_size + 1}: Using endpoint {s3_url}[/dim]")
             
             # Start parallel upload processes
             processes = []
@@ -378,7 +397,8 @@ class S3FloodTester:
         downloaded_files = []
         failed_files = []
         
-        s3_url = self.config["s3_urls"][0]  # Use first URL for now
+        # Get initial URL for this operation
+        s3_url = self._get_s3_url()
         
         # Set environment variables for s5cmd
         env = os.environ.copy()
@@ -387,6 +407,8 @@ class S3FloodTester:
         
         # Show operation start
         self.console.print(f"[cyan]Reading {len(s3_file_paths)} files using {self.config['parallel_threads']} parallel threads[/cyan]")
+        if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+            self.console.print(f'[dim]Cluster mode: Using random endpoints from {len(self.config["s3_urls"])} configured URLs[/dim]')
         
         # Track file statuses
         file_statuses = {}  # Track status of each file
@@ -399,7 +421,11 @@ class S3FloodTester:
                 break
                 
             batch = s3_file_paths[i:i+batch_size]
-            self.console.print(f"[dim]Processing batch {i//batch_size + 1}/{(len(s3_file_paths)-1)//batch_size + 1} ({len(batch)} files)[/dim]")
+            
+            # In cluster mode, potentially use a different endpoint for each batch
+            if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+                s3_url = self._get_s3_url()
+                self.console.print(f"[dim]Batch {i//batch_size + 1}: Using endpoint {s3_url}[/dim]")
             
             # Start parallel read processes
             processes = []
@@ -503,7 +529,8 @@ class S3FloodTester:
         deleted_files = []
         failed_files = []
         
-        s3_url = self.config["s3_urls"][0]  # Use first URL for now
+        # Get initial URL for this operation
+        s3_url = self._get_s3_url()
         
         # Set environment variables for s5cmd
         env = os.environ.copy()
@@ -512,6 +539,8 @@ class S3FloodTester:
         
         # Show operation start
         self.console.print(f"[cyan]Deleting {len(s3_file_paths)} files using {self.config['parallel_threads']} parallel threads[/cyan]")
+        if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+            self.console.print(f"[dim]Cluster mode: Using random endpoints from {len(self.config['s3_urls'])} configured URLs[/dim]")
         
         # Track file statuses
         file_statuses = {}  # Track status of each file
@@ -524,7 +553,11 @@ class S3FloodTester:
                 break
                 
             batch = s3_file_paths[i:i+batch_size]
-            self.console.print(f"[dim]Processing batch {i//batch_size + 1}/{(len(s3_file_paths)-1)//batch_size + 1} ({len(batch)} files)[/dim]")
+            
+            # In cluster mode, potentially use a different endpoint for each batch
+            if self.config.get("cluster_mode", False) and len(self.config["s3_urls"]) > 1:
+                s3_url = self._get_s3_url()
+                self.console.print(f"[dim]Batch {i//batch_size + 1}: Using endpoint {s3_url}[/dim]")
             
             # Start parallel delete processes
             processes = []

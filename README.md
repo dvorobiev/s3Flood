@@ -1,137 +1,137 @@
-# S3 Flood - S3 Backend Load Testing Tool
+# S3 Flood - Инструмент нагрузочного тестирования S3
 
-S3 Flood is a Terminal User Interface (TUI) application designed for stress-testing S3-compatible storage backends such as MinIO or AWS S3. It enables performance evaluation by generating test files and performing parallel upload, download, and delete operations.
+S3 Flood - это приложение с терминальным интерфейсом (TUI), предназначенное для стресс-тестирования S3-совместимых хранилищ, таких как MinIO или AWS S3. Оно позволяет оценить производительность, генерируя тестовые файлы и выполняя параллельные операции загрузки, скачивания и удаления.
 
-## Features
+## Возможности
 
-- **Interactive TUI**: Easy configuration and real-time monitoring
-- **Configurable File Generation**: Create test files of different sizes (small, medium, large)
-- **Parallel Operations**: Execute S3 operations in parallel using s5cmd
-- **Per-File Progress Tracking**: Individual progress bars for each file operation
-- **Randomized Workload**: Random concurrent read/write operations
-- **Statistics Tracking**: Performance metrics including throughput and operation times
-- **Infinite Loop Mode**: Continuous stress testing capability
+- **Интерактивный TUI**: Простая настройка и мониторинг в реальном времени
+- **Настраиваемая генерация файлов**: Создание тестовых файлов разных размеров (маленькие, средние, большие)
+- **Параллельные операции**: Выполнение S3-операций параллельно с использованием s5cmd
+- **Отслеживание прогресса по файлам**: Индивидуальные индикаторы прогресса для каждой операции
+- **Рандомизированная нагрузка**: Случайные параллельные операции чтения/записи
+- **Сбор статистики**: Метрики производительности, включая пропускную способность и время операций
+- **Режим бесконечного цикла**: Возможность непрерывного стресс-тестирования
 
-## Prerequisites
+## Требования
 
 - Python 3.7+
-- s5cmd installed and available in PATH
+- Установленный s5cmd и доступный в PATH
 
-## Installation
+## Установка
 
-1. Clone or download this repository
+1. Клонируйте или скачайте этот репозиторий
 
-2. Run the installation script:
+2. Запустите скрипт установки:
    ```bash
    ./install.sh
    ```
 
-   This script will:
-   - Check for Python 3 and pip3
-   - Install s5cmd
-   - Create a Python virtual environment
-   - Install Python dependencies from requirements.txt
+   Этот скрипт выполнит:
+   - Проверку Python 3 и pip3
+   - Установку s5cmd
+   - Создание виртуального окружения Python
+   - Установку зависимостей Python из requirements.txt
 
-3. Alternatively, you can install dependencies manually:
+3. Альтернативно, вы можете установить зависимости вручную:
    ```bash
-   # Install s5cmd
+   # Установка s5cmd
    wget -O s5cmd.tar.gz https://github.com/peak/s5cmd/releases/latest/download/s5cmd_$(uname -s)_$(uname -m).tar.gz
    tar -xzf s5cmd.tar.gz
    sudo install s5cmd /usr/local/bin/
    rm s5cmd.tar.gz
 
-   # Create virtual environment
+   # Создание виртуального окружения
    python3 -m venv venv
    source venv/bin/activate
 
-   # Install Python dependencies
+   # Установка зависимостей Python
    pip install -r requirements.txt
    ```
 
-## Configuration
+## Настройка
 
-Before running the application, configure it with your S3 settings:
+Перед запуском приложения настройте его с вашими параметрами S3:
 
 ```bash
 source venv/bin/activate
 python s3_flood.py --config
 ```
 
-This will start an interactive configuration wizard where you can set:
-- S3 endpoint URLs
-- Access key and secret key
-- Bucket name
-- Parallel threads count
-- File group sizes and counts
-- Infinite loop settings
+Это запустит интерактивный мастер настройки, где вы сможете задать:
+- URL endpoint'ов S3
+- Ключ доступа и секретный ключ
+- Имя бакета
+- Количество параллельных потоков
+- Размеры и количество файлов в группах
+- Настройки бесконечного цикла
 
-## Usage
+## Использование
 
-### Running the Application
+### Запуск приложения
 
-After configuration, run the application:
+После настройки запустите приложение:
 
 ```bash
 ./run.sh
 ```
 
-Or directly:
+Или напрямую:
 
 ```bash
 source venv/bin/activate
 python s3_flood.py
 ```
 
-### Command Line Options
+### Параметры командной строки
 
-- `python s3_flood.py` - Start the TUI application
-- `python s3_flood.py --config` - Run the interactive configuration wizard
+- `python s3_flood.py` - Запуск TUI-приложения
+- `python s3_flood.py --config` - Запуск интерактивного мастера настройки
 
-## Project Structure
+## Структура проекта
 
 ```
 s3Flood/
-├── s3_flood.py              # Main application
-├── config.yaml              # Configuration file
-├── requirements.txt         # Python dependencies
-├── install.sh               # Installation script
-├── run.sh                   # Run script
-├── README.md                # This file
-├── start_minio.sh           # MinIO startup script (for testing)
-├── test_s3_connection.py    # S3 connection test
-└── demo/                    # Demo scripts
-    ├── final_demo.py        # Final demo script
-    ├── test_progress.py     # Progress tracking test
-    └── demo_progress.py     # Progress demo
+├── s3_flood.py              # Основное приложение
+├── config.yaml              # Файл конфигурации
+├── requirements.txt         # Зависимости Python
+├── install.sh               # Скрипт установки
+├── run.sh                   # Скрипт запуска
+├── README.md                # Этот файл
+├── start_minio.sh           # Скрипт запуска MinIO (для тестирования)
+├── test_s3_connection.py    # Тест подключения к S3
+└── demo/                    # Демо-скрипты
+    ├── final_demo.py        # Финальный демо-скрипт
+    ├── test_progress.py     # Тест отслеживания прогресса
+    └── demo_progress.py     # Демонстрация прогресса
 ```
 
-## Configuration File
+## Файл конфигурации
 
-The application uses a YAML configuration file (`config.yaml`) with the following options:
+Приложение использует YAML-файл конфигурации ([config.yaml](file:///Users/dvorobiev/s3Flood/config.yaml)) со следующими параметрами:
 
 ```yaml
 s3_urls:
-  - http://localhost:9000        # S3 endpoint URLs
-access_key: minioadmin          # Access key
-secret_key: minioadmin          # Secret key
-bucket_name: test-bucket        # Bucket name
-cluster_mode: false             # Cluster mode (multiple endpoints)
-parallel_threads: 5             # Number of parallel threads
+  - http://localhost:9000        # URL endpoint'ов S3
+access_key: minioadmin          # Ключ доступа
+secret_key: minioadmin          # Секретный ключ
+bucket_name: test-bucket        # Имя бакета
+cluster_mode: false             # Режим кластера (несколько endpoint'ов)
+parallel_threads: 5             # Количество параллельных потоков
 file_groups:
   small:
-    max_size_mb: 100            # Max size for small files (MB)
-    count: 100                  # Number of small files
+    max_size_mb: 100            # Макс. размер маленьких файлов (МБ)
+    count: 100                  # Количество маленьких файлов
   medium:
-    max_size_mb: 5120           # Max size for medium files (MB)
-    count: 50                   # Number of medium files
+    max_size_mb: 5120           # Макс. размер средних файлов (МБ)
+    count: 50                   # Количество средних файлов
   large:
-    max_size_mb: 20480          # Max size for large files (MB)
-    count: 10                   # Number of large files
-infinite_loop: true             # Run in infinite loop
-cycle_delay_seconds: 15         # Delay between cycles (seconds)
+    max_size_mb: 20480          # Макс. размер больших файлов (МБ)
+    count: 10                   # Количество больших файлов
+infinite_loop: true             # Запуск в бесконечном цикле
+cycle_delay_seconds: 15         # Задержка между циклами (в секундах)
 ```
 
-## Dependencies
+## Зависимости
 
 - Python 3.7+
 - questionary==2.0.1
@@ -139,28 +139,28 @@ cycle_delay_seconds: 15         # Delay between cycles (seconds)
 - PyYAML==6.0.1
 - s5cmd (https://github.com/peak/s5cmd)
 
-## Development
+## Разработка
 
-### Running Tests
+### Запуск тестов
 
 ```bash
 source venv/bin/activate
-python test_s3_connection.py    # Test S3 connection
-python demo/final_demo.py       # Run demo
+python test_s3_connection.py    # Тест подключения к S3
+python demo/final_demo.py       # Запуск демо
 ```
 
-## Contributing
+## Участие в разработке
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+1. Сделайте форк репозитория
+2. Создайте ветку с новой функцией
+3. Зафиксируйте изменения
+4. Отправьте ветку
+5. Создайте Pull Request
 
-## License
+## Лицензия
 
-This project is licensed under the MIT License.
+Этот проект лицензирован по лицензии MIT.
 
-## Support
+## Поддержка
 
-For issues and feature requests, please open an issue on GitHub.
+По вопросам и предложениям по функциональности, пожалуйста, откройте issue на GitHub.

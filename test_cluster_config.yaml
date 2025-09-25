@@ -1,0 +1,22 @@
+s3_urls:
+  - http://s3-node1:9000
+  - http://s3-node2:9000
+  - http://s3-node3:9000
+access_key: YOUR_ACCESS_KEY
+secret_key: YOUR_SECRET_KEY
+bucket_name: test-bucket
+cluster_mode: true
+parallel_threads: 3
+file_groups:
+  small:
+    max_size_mb: 50
+    count: 10
+  medium:
+    max_size_mb: 200
+    count: 5
+  large:
+    max_size_mb: 1000
+    count: 2
+infinite_loop: false
+cycle_delay_seconds: 10
+test_files_directory: "./s3_temp_files"
