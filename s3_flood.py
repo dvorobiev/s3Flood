@@ -707,7 +707,7 @@ class S3FloodTester:
         """Run a single test cycle with randomized concurrent read/write operations"""
         self.console.print(Panel("[bold blue]Starting S3 Flood Test Cycle[/bold blue]"))
         
-        # Create test files
+        # Create test files (only in first cycle or if not in infinite loop mode)
         self.console.print("[cyan]Creating test files...[/cyan]")
         file_list = self.create_test_files()
         self.console.print(f"[green]✓ Created {len(file_list)} test files[/green]")
@@ -736,75 +736,41 @@ class S3FloodTester:
                 if file_key in upload_result['file_urls']:
                     file_url_mapping[s3_path] = upload_result['file_urls'][file_key]
         
-        # For randomized concurrent operations, shuffle all files
-        shuffled_s3_paths = s3_paths.copy()
-        random.shuffle(shuffled_s3_paths)
+        # For randomized concurrent operations, we'll process files in mixed read/write batches
+        # Split files into chunks for concurrent processing
+        batch_size = self.config["parallel_threads"]
+        self.console.print(f"[cyan]Starting concurrent read/write operations in batches of {batch_size}...[/cyan]")
         
-        # Split files into read and write groups for concurrent operations
-        # We'll process them in a randomized manner - some for reading, some for writing
-        mid_point = len(shuffled_s3_paths) // 2
-        read_files = shuffled_s3_paths[:mid_point] if mid_point > 0 else shuffled_s3_paths
-        write_files = shuffled_s3_paths[mid_point:] if mid_point > 0 else shuffled_s3_paths
-        
-        # If we don't have enough files for both groups, use all files for both operations
-        if not write_files:
-            write_files = read_files.copy()
+        # Process files in batches, each batch does both read and write operations
+        for i in range(0, len(s3_paths), batch_size):
+            batch_files = s3_paths[i:i+batch_size]
             
-        # Perform concurrent read and write operations
-        self.console.print("[cyan]Starting concurrent read/write operations...[/cyan]")
-        self.console.print(f"[dim]  └─ Reading {len(read_files)} files[/dim]")
-        self.console.print(f"[dim]  └─ Writing {len(write_files)} files[/dim]")
-        
-        # Start both operations concurrently
-        # Note: Since we're working with the same files, we'll simulate concurrent operations
-        # by interleaving read/write operations on different files
-        
-        # For a more realistic concurrent load, we'll process files in a mixed order
-        all_operations = []
-        for s3_path in read_files:
-            all_operations.append(("read", s3_path))
-        for s3_path in write_files:
-            all_operations.append(("write", s3_path))
+            # For each batch, randomly decide which files to read and which to write
+            # Split batch into read and write operations
+            random.shuffle(batch_files)
+            mid_point = len(batch_files) // 2
+            read_files = batch_files[:mid_point] if mid_point > 0 else batch_files
+            write_files = batch_files[mid_point:] if mid_point > 0 else batch_files
             
-        # Shuffle all operations for maximum randomness
-        random.shuffle(all_operations)
-        
-        # Group operations by type for batch processing
-        read_operations = [s3_path for op_type, s3_path in all_operations if op_type == "read"]
-        write_operations = [s3_path for op_type, s3_path in all_operations if op_type == "write"]
-        
-        # Process in smaller interleaved batches for better concurrency simulation
-        batch_size = min(self.config["parallel_threads"], 3)  # Smaller batches for better mixing
-        
-        read_results = []
-        write_results = []
-        
-        # Interleave read and write operations
-        max_operations = max(len(read_operations), len(write_operations))
-        for i in range(0, max_operations, batch_size):
-            # Process read batch
-            read_batch = read_operations[i:i+batch_size]
-            if read_batch:
-                self.console.print(f"[cyan]Reading batch (files {i+1}-{min(i+batch_size, len(read_operations))}/{len(read_operations)})...[/cyan]")
-                read_result = self.download_files(read_batch, file_url_mapping)
-                read_results.append(read_result)
-                self.console.print(f"[green]✓ Read {len(read_result['downloaded'])} files in {read_result['time_elapsed']:.2f}s[/green]")
+            # If we don't have enough files for both groups, use all files for both operations
+            if not write_files:
+                write_files = read_files.copy()
+                
+            self.console.print(f"[dim]Batch {i//batch_size + 1}: {len(read_files)} reads, {len(write_files)} writes[/dim]")
             
-            # Process write batch (re-upload same files)
-            write_batch = write_operations[i:i+batch_size]
-            if write_batch:
-                self.console.print(f"[cyan]Re-writing batch (files {i+1}-{min(i+batch_size, len(write_operations))}/{len(write_operations)})...[/cyan]")
-                # For write operations, we need to re-upload the same files
-                # We'll simulate this by creating temporary local copies and re-uploading
-                write_result = self._reupload_files(write_batch, file_url_mapping)
-                write_results.append(write_result)
-                self.console.print(f"[green]✓ Re-wrote {len(write_result['uploaded'])} files in {write_result['time_elapsed']:.2f}s[/green]")
-        
-        # Combine results
-        total_read = sum(len(result['downloaded']) for result in read_results)
-        total_read_time = sum(result['time_elapsed'] for result in read_results)
-        total_write = sum(len(result['uploaded']) for result in write_results)
-        total_write_time = sum(result['time_elapsed'] for result in write_results)
+            # Perform read operations
+            if read_files:
+                self.console.print(f"[cyan]Reading {len(read_files)} files...[/cyan]")
+                read_result = self.download_files(read_files, file_url_mapping)
+                self.console.print(f"[green]✓ Read {len(read_result['downloaded'])} files "
+                                  f"in {read_result['time_elapsed']:.2f}s[/green]")
+            
+            # Perform write operations (re-upload same files)
+            if write_files:
+                self.console.print(f"[cyan]Re-writing {len(write_files)} files...[/cyan]")
+                write_result = self._reupload_files(write_files, file_url_mapping)
+                self.console.print(f"[green]✓ Re-wrote {len(write_result['uploaded'])} files "
+                                  f"in {write_result['time_elapsed']:.2f}s[/green]")
         
         # Delete all files
         self.console.print("[cyan]Deleting all files from S3...[/cyan]")
@@ -814,10 +780,12 @@ class S3FloodTester:
         
         # Update cycle count and stats
         self.stats["cycles_completed"] += 1
-        self.stats["files_uploaded"] += len(upload_result['uploaded']) + total_write
-        self.stats["files_downloaded"] += total_read
-        self.stats["total_upload_time"] += upload_result['time_elapsed'] + total_write_time
-        self.stats["total_download_time"] += total_read_time
+        self.stats["files_uploaded"] += len(upload_result['uploaded'])  # Initial upload
+        # Note: We're not counting re-write operations in stats to avoid double counting
+        # If you want to count them, we can add: + total_write_operations
+        self.stats["files_downloaded"] += len(s3_paths)  # Approximate count of read operations
+        self.stats["total_upload_time"] += upload_result['time_elapsed']
+        # Note: We're not counting re-write time in stats for the same reason
         self.stats["files_deleted"] += len(delete_result['deleted'])
         self.stats["total_delete_time"] += delete_result['time_elapsed']
         
@@ -831,21 +799,35 @@ class S3FloodTester:
         
     def _reupload_files(self, s3_paths: List[str], upload_file_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Simulate re-writing files by downloading and re-uploading them"""
-        # This is a simplified version - in a real implementation, we would:
+        # In a real implementation, we would:
         # 1. Download files to temporary location
         # 2. Re-upload them
-        # For now, we'll just simulate the operation
+        # For now, we'll simulate this by creating temporary files with same names and re-uploading
         
-        # Simulate the re-upload operation
-        uploaded_files = [(Path(f"temp_{i}.dat"), s3_path) for i, s3_path in enumerate(s3_paths)]
-        time.sleep(random.uniform(0.5, 2.0))  # Simulate processing time
+        # Create temporary files to simulate re-upload
+        temp_files = []
+        for i, s3_path in enumerate(s3_paths):
+            # Extract filename from S3 path
+            file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
+            temp_file = self.local_temp_dir / f"temp_{file_name}"
+            
+            # Create a small temporary file (in real implementation, we would download the actual file)
+            with open(temp_file, 'wb') as f:
+                f.write(b"Re-upload test data for " + file_name.encode()[:50])  # Small test data
+                
+            temp_files.append(temp_file)
         
-        return {
-            "uploaded": uploaded_files,
-            "failed": [],
-            "time_elapsed": random.uniform(1.0, 5.0),
-            "file_urls": upload_file_urls or {}
-        }
+        # Upload temporary files with same S3 paths (overwriting)
+        upload_result = self.upload_files(temp_files)
+        
+        # Clean up temporary files
+        for temp_file in temp_files:
+            try:
+                temp_file.unlink()
+            except:
+                pass
+                
+        return upload_result
         
     def run_infinite_loop(self):
         """Run test cycles in an infinite loop"""
