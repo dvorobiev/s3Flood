@@ -149,7 +149,7 @@ class S3FloodTester:
             return False
             
     def create_test_files(self) -> List[Path]:
-        """Create test files of different sizes"""
+        """Create test files of different sizes with progress tracking"""
         # Use directory from config
         if self.local_temp_dir.exists():
             shutil.rmtree(self.local_temp_dir)
@@ -157,46 +157,89 @@ class S3FloodTester:
         
         file_list = []
         
-        # Create small files (up to 100MB)
+        # Calculate total files to create
         small_config = self.config["file_groups"]["small"]
+        medium_config = self.config["file_groups"]["medium"]
+        large_config = self.config["file_groups"]["large"]
+        total_files = small_config["count"] + medium_config["count"] + large_config["count"]
+        
+        self.console.print(f"[cyan]Creating {total_files} test files...[/cyan]")
+        
+        # Create small files (up to 100MB)
+        self.console.print(f"[dim]  └─ Small: {small_config['count']} files (up to {small_config['max_size_mb']}MB each)[/dim]")
         for i in range(small_config["count"]):
-            size_mb = random.randint(1, small_config["max_size_mb"])
+            # Ensure we have a valid range for random.randint
+            min_size = 1
+            max_size = max(min_size, small_config["max_size_mb"])
+            size_mb = random.randint(min_size, max_size)
             file_path = self.local_temp_dir / f"small_{i}_{size_mb}MB.dat"
             self._create_random_file(file_path, size_mb * 1024 * 1024)
             file_list.append(file_path)
-            
+            self.console.print(f"[green]✓[/green] Created {file_path.name} ({size_mb}MB)")
+        
         # Create medium files (up to 5GB)
-        medium_config = self.config["file_groups"]["medium"]
+        self.console.print(f"[dim]  └─ Medium: {medium_config['count']} files (up to {medium_config['max_size_mb']}MB each)[/dim]")
         for i in range(medium_config["count"]):
-            size_mb = random.randint(100, medium_config["max_size_mb"])
+            # Ensure we have a valid range for random.randint
+            min_size = 100
+            max_size = max(min_size, medium_config["max_size_mb"])
+            size_mb = random.randint(min_size, max_size)
             file_path = self.local_temp_dir / f"medium_{i}_{size_mb}MB.dat"
             self._create_random_file(file_path, size_mb * 1024 * 1024)
             file_list.append(file_path)
-            
+            self.console.print(f"[green]✓[/green] Created {file_path.name} ({size_mb}MB)")
+        
         # Create large files (up to 20GB)
-        large_config = self.config["file_groups"]["large"]
+        self.console.print(f"[dim]  └─ Large: {large_config['count']} files (up to {large_config['max_size_mb']}MB each)[/dim]")
         for i in range(large_config["count"]):
-            size_mb = random.randint(1000, large_config["max_size_mb"])
+            # Ensure we have a valid range for random.randint
+            min_size = 1000
+            max_size = max(min_size, large_config["max_size_mb"])
+            size_mb = random.randint(min_size, max_size)
             file_path = self.local_temp_dir / f"large_{i}_{size_mb}MB.dat"
             self._create_random_file(file_path, size_mb * 1024 * 1024)
             file_list.append(file_path)
-            
+            self.console.print(f"[green]✓[/green] Created {file_path.name} ({size_mb}MB)")
+        
         # Shuffle the file list for random processing
         random.shuffle(file_list)
+        self.console.print(f"[green]✓[/green] Created {len(file_list)} test files")
         return file_list
-        
+
     def _create_random_file(self, file_path: Path, size_bytes: int):
-        """Create a random file of specified size"""
+        """Create a random file of specified size with progress tracking"""
+        # Show file creation start
+        size_mb = size_bytes // (1024 * 1024)
+        self.console.print(f"[dim]  Creating {file_path.name} ({size_mb}MB)...[/dim]")
+        
         with open(file_path, 'wb') as f:
             # Write in chunks to handle large files efficiently
-            chunk_size = min(1024 * 1024, size_bytes)  # 1MB chunks or smaller
+            chunk_size = min(10 * 1024 * 1024, size_bytes)  # 10MB chunks or smaller
             remaining = size_bytes
+            written = 0
             
-            while remaining > 0:
+            # For files larger than 50MB, show progress updates every 10%
+            show_detailed_progress = size_bytes > 50 * 1024 * 1024
+            
+            while remaining > 0 and self.running:
                 write_size = min(chunk_size, remaining)
                 f.write(os.urandom(write_size))
                 remaining -= write_size
+                written += write_size
                 
+                # Show progress for larger files at 10% intervals
+                if show_detailed_progress:
+                    progress_percent = (written / size_bytes) * 100
+                    # Show progress at ~10% intervals
+                    if progress_percent >= ((written - write_size) / size_bytes) * 100 + 10 or written == size_bytes:
+                        written_mb = written // (1024 * 1024)
+                        total_mb = size_bytes // (1024 * 1024)
+                        self.console.print(f"[dim]    └─ {file_path.name}: {written_mb}/{total_mb}MB ({progress_percent:.1f}%)[/dim]")
+                
+        # Show completion for all files
+        if self.running:
+            self.console.print(f"[green]    ✓ {file_path.name} completed[/green]")
+
     def upload_files(self, file_list: List[Path]) -> Dict[str, Any]:
         """Upload files to S3 using s5cmd in parallel with per-file progress"""
         cycle_start_time = time.time()
