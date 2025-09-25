@@ -1,0 +1,19 @@
+s3_urls:
+- http://localhost:9000
+access_key: minioadmin
+secret_key: minioadmin
+bucket_name: test-bucket
+cluster_mode: false
+parallel_threads: 2
+file_groups:
+  small:
+    max_size_mb: 10
+    count: 30
+  medium:
+    max_size_mb: 100
+    count: 5
+  large:
+    max_size_mb: 500
+    count: 10
+infinite_loop: false
+cycle_delay_seconds: 5
