@@ -14,8 +14,17 @@ fi
 
 echo "✓ s5cmd is installed"
 
+# Activate virtual environment
+if [ -d "venv" ]; then
+    echo "Activating virtual environment..."
+    source venv/bin/activate
+else
+    echo "Virtual environment not found. Please run install.sh first."
+    exit 1
+fi
+
 # Check if Python dependencies are installed
-if ! python3 -c "import questionary, rich, yaml" &> /dev/null
+if ! python -c "import questionary, rich, yaml" &> /dev/null
 then
     echo "Python dependencies are not installed. Please run install.sh first."
     exit 1
@@ -25,6 +34,6 @@ echo "✓ Python dependencies are installed"
 
 # Run the application
 echo "Starting S3 Flood TUI..."
-python3 s3_flood.py
+python s3_flood.py
 
 echo "=== S3 Flood Finished ==="

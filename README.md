@@ -28,23 +28,24 @@ S3 Flood is a Terminal User Interface (TUI) application designed for stress-test
 
    This script will:
    - Check for Python 3 and pip3
-   - Install s5cmd (on macOS with Homebrew)
+   - Install s5cmd
+   - Create a Python virtual environment
    - Install Python dependencies from requirements.txt
 
 3. Alternatively, you can install dependencies manually:
    ```bash
-   # Install s5cmd (varies by OS)
-   # On macOS with Homebrew:
-   brew tap peak/tap
-   brew install s5cmd
-   
-   # On Linux:
-   wget -O s5cmd https://github.com/peak/s5cmd/releases/latest/download/s5cmd_$(uname -s)_$(uname -m).tar.gz
-   tar -xzf s5cmd_$(uname -s)_$(uname -m).tar.gz
+   # Install s5cmd
+   wget -O s5cmd.tar.gz https://github.com/peak/s5cmd/releases/latest/download/s5cmd_$(uname -s)_$(uname -m).tar.gz
+   tar -xzf s5cmd.tar.gz
    sudo install s5cmd /usr/local/bin/
-   
+   rm s5cmd.tar.gz
+
+   # Create virtual environment
+   python3 -m venv venv
+   source venv/bin/activate
+
    # Install Python dependencies
-   pip3 install -r requirements.txt
+   pip install -r requirements.txt
    ```
 
 ## Configuration
@@ -52,7 +53,8 @@ S3 Flood is a Terminal User Interface (TUI) application designed for stress-test
 Before running the application, configure it with your S3 settings:
 
 ```bash
-python3 s3_flood.py --config
+source venv/bin/activate
+python s3_flood.py --config
 ```
 
 This will start an interactive configuration wizard where you can set:
@@ -76,13 +78,14 @@ After configuration, run the application:
 Or directly:
 
 ```bash
-python3 s3_flood.py
+source venv/bin/activate
+python s3_flood.py
 ```
 
 ### Command Line Options
 
-- `python3 s3_flood.py` - Start the TUI application
-- `python3 s3_flood.py --config` - Run the interactive configuration wizard
+- `python s3_flood.py` - Start the TUI application
+- `python s3_flood.py --config` - Run the interactive configuration wizard
 
 ## Project Structure
 
@@ -141,8 +144,9 @@ cycle_delay_seconds: 15         # Delay between cycles (seconds)
 ### Running Tests
 
 ```bash
-python3 test_s3_connection.py    # Test S3 connection
-python3 demo/final_demo.py       # Run demo
+source venv/bin/activate
+python test_s3_connection.py    # Test S3 connection
+python demo/final_demo.py       # Run demo
 ```
 
 ## Contributing
