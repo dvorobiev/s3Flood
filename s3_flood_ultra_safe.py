@@ -318,24 +318,79 @@ class WindowsS3FloodTester:
         except Exception as e:
             self.safe_print(f"[ERROR] Upload error for {local_file.name}: {e}")
             return False
+    
+    def run_s5cmd_download(self, s3_path: str, bucket_name: str) -> bool:
+        """Download file using s5cmd to /dev/null (Linux) or nul (Windows)"""
+        if not self.s5cmd_path:
+            return False
+            
+        try:
+            env = os.environ.copy()
+            env["AWS_ACCESS_KEY_ID"] = self.config["access_key"]
+            env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
+            
+            s3_url = self.config["s3_urls"][0]  # Use first URL for simplicity
+            
+            # Use appropriate null device for platform
+            null_device = "nul" if platform.system() == "Windows" else "/dev/null"
+            
+            cmd = [
+                self.s5cmd_path,
+                "--endpoint-url", s3_url,
+                "cp", s3_path, null_device
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
+            return result.returncode == 0
+            
+        except Exception as e:
+            self.safe_print(f"[ERROR] Download error for {s3_path}: {e}")
+            return False
+    
+    def run_s5cmd_delete(self, s3_path: str) -> bool:
+        """Delete file using s5cmd"""
+        if not self.s5cmd_path:
+            return False
+            
+        try:
+            env = os.environ.copy()
+            env["AWS_ACCESS_KEY_ID"] = self.config["access_key"]
+            env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
+            
+            s3_url = self.config["s3_urls"][0]  # Use first URL for simplicity
+            
+            cmd = [
+                self.s5cmd_path,
+                "--endpoint-url", s3_url,
+                "rm", s3_path
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60, env=env)
+            return result.returncode == 0
+            
+        except Exception as e:
+            self.safe_print(f"[ERROR] Delete error for {s3_path}: {e}")
+            return False
             
     def run_test_cycle(self):
-        """Run a single test cycle"""
+        """Run a single test cycle with original Linux logic: upload all -> concurrent read/write batches -> delete all"""
         self.safe_print("")
         self.safe_print("=" * 50)
         self.safe_print("Starting S3 Flood Test Cycle")
         self.safe_print("=" * 50)
         
-        # Create test files
+        # Step 1: Create test files
+        self.safe_print("[INFO] Creating test files...")
         test_files = self.create_test_files()
         if not test_files:
             self.safe_print("[ERROR] Failed to create test files")
             return
-            
-        # Upload files
-        self.safe_print(f"\\n[INFO] Uploading {len(test_files)} files...")
+        self.safe_print(f"[SUCCESS] Created {len(test_files)} test files")
+        
+        # Step 2: Upload ALL files first (like in original Linux version)
+        self.safe_print(f"\n[INFO] Uploading ALL {len(test_files)} files to S3...")
         upload_start = time.time()
-        uploaded_files = []
+        uploaded_files = []  # List of (file_path, s3_path) tuples
         
         for file_path in test_files:
             if not self.running:
@@ -343,7 +398,8 @@ class WindowsS3FloodTester:
                 
             self.safe_print(f"Uploading {file_path.name}...")
             if self.run_s5cmd_upload(file_path, self.config["bucket_name"]):
-                uploaded_files.append(file_path)
+                s3_path = f"s3://{self.config['bucket_name']}/{file_path.name}"
+                uploaded_files.append((file_path, s3_path))
                 self.stats["files_uploaded"] += 1
                 self.stats["total_bytes_uploaded"] += file_path.stat().st_size
             else:
@@ -351,12 +407,119 @@ class WindowsS3FloodTester:
                 
         upload_time = time.time() - upload_start
         self.stats["total_upload_time"] += upload_time
+        self.safe_print(f"[SUCCESS] Uploaded {len(uploaded_files)} files in {upload_time:.2f} seconds")
         
-        self.safe_print(f"\\n[SUCCESS] Uploaded {len(uploaded_files)} files in {upload_time:.2f} seconds")
+        # Extract S3 paths for subsequent operations
+        s3_paths = [s3_path for _, s3_path in uploaded_files]
+        
+        # Step 3: Concurrent read/write operations in batches (like in original Linux version)
+        if s3_paths:
+            batch_size = self.config["parallel_threads"]
+            self.safe_print(f"\n[INFO] Starting concurrent read/write operations in batches of {batch_size}...")
+            
+            # Process files in batches, each batch does both read and write operations
+            for i in range(0, len(s3_paths), batch_size):
+                if not self.running:
+                    break
+                    
+                batch_files = s3_paths[i:i+batch_size]
+                
+                # Split batch into read and write operations (like in original)
+                random.shuffle(batch_files)
+                mid_point = len(batch_files) // 2
+                read_files = batch_files[:mid_point] if mid_point > 0 else batch_files
+                write_files = batch_files[mid_point:] if mid_point > 0 else batch_files
+                
+                # If we don't have enough files for both groups, use all files for both operations
+                if not write_files:
+                    write_files = read_files.copy()
+                    
+                batch_num = i//batch_size + 1
+                self.safe_print(f"\nBatch {batch_num}: {len(read_files)} reads, {len(write_files)} writes")
+                
+                # Perform read operations
+                if read_files:
+                    self.safe_print(f"[INFO] Reading {len(read_files)} files...")
+                    read_start = time.time()
+                    read_success = 0
+                    
+                    for s3_path in read_files:
+                        if not self.running:
+                            break
+                        file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
+                        self.safe_print(f"Reading {file_name}...")
+                        if self.run_s5cmd_download(s3_path, self.config["bucket_name"]):
+                            read_success += 1
+                            self.stats["files_downloaded"] += 1
+                        else:
+                            self.safe_print(f"[ERROR] Failed to read {file_name}")
+                    
+                    read_time = time.time() - read_start
+                    self.stats["total_download_time"] += read_time
+                    self.safe_print(f"[SUCCESS] Read {read_success} files in {read_time:.2f} seconds")
+                
+                # Perform write operations (re-upload existing files)
+                if write_files:
+                    self.safe_print(f"[INFO] Re-writing {len(write_files)} files...")
+                    write_start = time.time()
+                    write_success = 0
+                    
+                    # Create temporary files for re-upload (simulating write operations)
+                    for s3_path in write_files:
+                        if not self.running:
+                            break
+                        
+                        file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
+                        temp_file = self.local_temp_dir / f"rewrite_{file_name}"
+                        
+                        # Create a temporary file with different content
+                        try:
+                            with open(temp_file, 'wb') as f:
+                                f.write(b"Re-write test data for " + file_name.encode()[:50])
+                        except Exception as e:
+                            self.safe_print(f"[ERROR] Failed to create temp file: {e}")
+                            continue
+                        
+                        self.safe_print(f"Re-writing {file_name}...")
+                        if self.run_s5cmd_upload(temp_file, self.config["bucket_name"]):
+                            write_success += 1
+                        else:
+                            self.safe_print(f"[ERROR] Failed to re-write {file_name}")
+                        
+                        # Clean up temp file
+                        try:
+                            temp_file.unlink()
+                        except:
+                            pass
+                    
+                    write_time = time.time() - write_start
+                    self.safe_print(f"[SUCCESS] Re-wrote {write_success} files in {write_time:.2f} seconds")
+        
+        # Step 4: Delete all files (like in original Linux version)
+        if s3_paths:
+            self.safe_print(f"\n[INFO] Deleting ALL {len(s3_paths)} files from S3...")
+            delete_start = time.time()
+            delete_success = 0
+            
+            for s3_path in s3_paths:
+                if not self.running:
+                    break
+                file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
+                self.safe_print(f"Deleting {file_name}...")
+                if self.run_s5cmd_delete(s3_path):
+                    delete_success += 1
+                    self.stats["files_deleted"] += 1
+                else:
+                    self.safe_print(f"[ERROR] Failed to delete {file_name}")
+            
+            delete_time = time.time() - delete_start
+            self.stats["total_delete_time"] += delete_time
+            self.safe_print(f"[SUCCESS] Deleted {delete_success} files in {delete_time:.2f} seconds")
         
         # Clean up local files
         if self.local_temp_dir.exists():
             shutil.rmtree(self.local_temp_dir)
+            self.safe_print("[INFO] Cleaned up temporary files")
             
         self.stats["cycles_completed"] += 1
         self.safe_print("")
@@ -468,7 +631,7 @@ class WindowsS3FloodTester:
                     
                 # Wait between cycles
                 delay = self.config.get("cycle_delay_seconds", 15)
-                self.safe_print(f"\\n[INFO] Waiting {delay} seconds until next cycle...")
+                self.safe_print(f"\n[INFO] Waiting {delay} seconds until next cycle...")
                 time.sleep(delay)
                 
         except KeyboardInterrupt:
