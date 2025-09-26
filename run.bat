@@ -36,16 +36,23 @@ REM Try to run with Windows Terminal if available, otherwise use regular console
 where wt >nul 2>&1
 if %errorlevel% equ 0 (
     echo [INFO] Windows Terminal detected, using improved console...
-    wt -w 0 cmd /c "cd /d "%~dp0" && python s3_flood.py && pause"
+    wt -w 0 cmd /c "cd /d "%~dp0" && python s3_flood_windows.py && pause"
 ) else (
-    echo [INFO] Trying main version...
-    python s3_flood.py
+    echo [INFO] Trying Windows-compatible version...
+    python s3_flood_windows.py
     if %errorlevel% neq 0 (
         echo.
-        echo [WARNING] Main version failed, trying simple compatible version...
-        echo [INFO] This often happens on older Windows systems
+        echo [WARNING] Windows version failed, trying main version...
+        echo [INFO] This may have library compatibility issues...
         echo.
-        python s3_flood_simple.py
+        python s3_flood.py
+        if %errorlevel% neq 0 (
+            echo.
+            echo [WARNING] Main version failed, trying simple compatible version...
+            echo [INFO] This often happens on older Windows systems
+            echo.
+            python s3_flood_simple.py
+        )
     )
 )
 

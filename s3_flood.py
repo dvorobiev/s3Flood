@@ -24,6 +24,41 @@ if platform.system() == "Windows":
     except:
         pass
 
+# Global flag to track if we should use simple mode
+USE_SIMPLE_MODE = False
+
+# Try to import rich/questionary libraries
+try:
+    import questionary
+    from rich.console import Console
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
+    from rich.panel import Panel
+    from rich.layout import Layout
+    from rich.live import Live
+except ImportError as e:
+    print(f"[WARNING] Could not import rich/questionary libraries: {e}")
+    print("[INFO] Falling back to simple mode...")
+    USE_SIMPLE_MODE = True
+    # Create dummy classes to prevent errors
+    class Console:
+        def print(self, *args, **kwargs):
+            print(*args)
+    
+    class Table:
+        def __init__(self, *args, **kwargs):
+            pass
+        def add_column(self, *args, **kwargs):
+            pass
+        def add_row(self, *args, **kwargs):
+            pass
+    
+    class Panel:
+        def __init__(self, *args, **kwargs):
+            pass
+    
+    questionary = None
+
 import os
 import sys
 import yaml
@@ -37,14 +72,6 @@ import time
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any, Optional
-
-import questionary
-from rich.console import Console
-from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeElapsedColumn
-from rich.panel import Panel
-from rich.layout import Layout
-from rich.live import Live
 
 
 class S3FloodTester:

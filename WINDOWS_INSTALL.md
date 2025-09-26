@@ -1,88 +1,140 @@
-# S3 Flood Windows Installation Guide
+# S3 Flood Windows Installation Guide# S3 Flood - Windows Installation Guide
 
-## FULLY AUTOMATED INSTALLATION (Recommended!)
+## 🚀 Quick Start (Recommended)
 
-1. Download the project from GitHub:
-   - Go to https://github.com/dvorobiev/s3Flood
-   - Click "Code" → "Download ZIP"
-   - Extract the archive to a convenient folder
+### Method 1: Automatic Installation
+1. Download the `windows-support` branch
+2. Run `install.bat`
+3. Use `run_windows.bat` for best compatibility
 
-2. Run automatic installation:
-   - Open the project folder
-   - **Right-click** on `install.bat` → "Run as administrator"
-   - Wait for installation to complete (may take 5-10 minutes)
+### Method 2: Manual Installation
+1. Install Python 3.7+ from [python.org](https://www.python.org/downloads/)
+2. During installation, **check "Add Python to PATH"**
+3. Install dependencies: `pip install pyyaml`
+4. Run: `python s3_flood_windows.py`
 
-**What the script will install:**
-- Python 3.11 (automatically)
-- All required Python libraries
-- s5cmd (S3 command-line tool)
+## 📋 Available Launchers
 
-## Running the Application
+| Launcher | Description | Compatibility |
+|----------|-------------|---------------|
+| `run_windows.bat` | **Windows-compatible version (RECOMMENDED)** | ✅ All Windows versions |
+| `run_simple.bat` | Simple text-based interface | ✅ All Windows versions |
+| `run.bat` | Full version with fallbacks | ⚠️ May have issues on some systems |
 
-**Multiple ways to run S3 Flood on Windows:**
+## 🔧 Troubleshooting
 
-1. **run.bat** - Enhanced launcher with Windows Terminal support
-2. **run.ps1** - PowerShell version (recommended for console issues)
-3. **run_simple.bat** - Fallback version for compatibility issues
-4. **Direct command:** `python s3_flood.py`
+### Issue: "Python not found"
+**Solution:**
+1. Install Python from [python.org](https://www.python.org/downloads/)
+2. During installation, **check "Add Python to PATH"**
+3. Restart command prompt
+4. Test: `python --version`
 
-## Troubleshooting Console Issues
-
-**If you see prompt_toolkit/questionary or rich library errors:**
-
-### SOLUTION 1: Use Simple Compatible Version (Recommended)
-```cmd
-run_simple.bat
+### Issue: Rich library errors (WinError 31)
+**Solution:**
+Use the Windows-compatible version:
+```batch
+run_windows.bat
 ```
-This version works on ANY Windows system without console library issues.
+This version doesn't use rich/questionary libraries.
 
-### SOLUTION 2: Test Your System Compatibility
-```cmd
-test_compatibility.bat
+### Issue: s5cmd not found or crashes
+**Solution:**
+The Windows version automatically downloads s5cmd:
+1. Run `python s3_flood_windows.py`
+2. It will detect your Windows architecture
+3. Download and install the correct s5cmd version
+4. No manual installation required!
+
+### Issue: Encoding problems (кракозябры)
+**Solution:**
+All batch files now include `chcp 65001` to fix UTF-8 encoding.
+
+### Issue: Console compatibility problems
+**Solution:**
+1. Try Windows Terminal (recommended): `winget install Microsoft.WindowsTerminal`
+2. Use PowerShell instead of Command Prompt
+3. Use the Windows-compatible version: `run_windows.bat`
+
+## 📁 File Structure
+
 ```
-This will tell you which version to use.
-
-### SOLUTION 3: Try PowerShell
-```powershell
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-.\run.ps1
+s3Flood/
+├── s3_flood_windows.py     # Windows-compatible version (RECOMMENDED)
+├── s3_flood_simple.py      # Simple fallback version
+├── s3_flood.py             # Full version with rich UI
+├── run_windows.bat         # Windows launcher (RECOMMENDED)
+├── run_simple.bat          # Simple launcher
+├── run.bat                 # Main launcher with fallbacks
+├── install.bat             # Windows installer
+├── config.yaml             # Configuration file
+└── tools/                  # Auto-downloaded s5cmd
+    └── s5cmd.exe
 ```
 
-### SOLUTION 4: Enhanced Launcher
-```cmd
-run.bat
+## ⚙️ Configuration
+
+Edit `config.yaml` or use the built-in configuration menu:
+
+```yaml
+s3_urls: ["http://localhost:9000"]
+access_key: "minioadmin"
+secret_key: "minioadmin"
+bucket_name: "test-bucket"
+cluster_mode: false
+parallel_threads: 5
+file_groups:
+  small: {max_size_mb: 100, count: 10}
+  medium: {max_size_mb: 1024, count: 5}
+  large: {max_size_mb: 5120, count: 2}
+infinite_loop: true
+cycle_delay_seconds: 15
+test_files_directory: "./s3_temp_files"
 ```
-This automatically tries main version, then falls back to simple version.
 
-### Available Launchers:
-- **run_simple.bat** - Always works, basic functionality
-- **run.bat** - Tries advanced version, falls back to simple
-- **run.ps1** - PowerShell version
-- **test_compatibility.bat** - Tests what works on your system
+## 🎯 Recommended Usage
 
-## If Problems Occur
+For best Windows compatibility:
 
-1. **Administrator rights error:**
-   - You MUST run install.bat as administrator
-
-2. **Download errors:**
-   - Check internet connection
-   - Temporarily disable antivirus during installation
-
-3. **Manual installation (last resort):**
-   ```cmd
-   # Install Python from python.org
-   pip install -r requirements.txt
-   # Download s5cmd from github.com/peak/s5cmd/releases
+1. **First time setup:**
+   ```batch
+   install.bat
    ```
 
-## Encoding Fix
+2. **Daily usage:**
+   ```batch
+   run_windows.bat
+   ```
 
-The new version of install.bat and run.bat should display correctly in Windows console.
-If you still see garbled text, your Windows console might need encoding adjustment.
+3. **If problems occur:**
+   ```batch
+   run_simple.bat
+   ```
 
-## Configuration
+## 🐛 Common Error Solutions
 
-- Run: `python s3_flood.py --config`
-- Or edit the `config.yaml` file manually
+### PermissionError [WinError 31]
+- **Cause:** Rich library console compatibility issue
+- **Solution:** Use `run_windows.bat` (doesn't use rich)
 
+### Exception 0xc0000005 (s5cmd crash)
+- **Cause:** Wrong s5cmd architecture or corrupted binary
+- **Solution:** Delete `tools/` folder, restart - auto-downloads correct version
+
+### AssertionError (prompt_toolkit)
+- **Cause:** questionary library compatibility issue
+- **Solution:** Use `run_windows.bat` (doesn't use questionary)
+
+### SyntaxError
+- **Cause:** Python version too old
+- **Solution:** Install Python 3.7+ from python.org
+
+## 📞 Support
+
+If you still have issues:
+1. Try `run_windows.bat` - most compatible version
+2. Check Python installation: `python --version`
+3. Manual run: `python s3_flood_windows.py`
+4. Check the error messages for specific guidance
+
+The Windows-compatible version (`s3_flood_windows.py`) is designed to work on all Windows systems without external library dependencies.
