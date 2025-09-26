@@ -9,6 +9,9 @@ import yaml
 import subprocess
 import platform
 from pathlib import Path
+import zipfile
+import urllib.request
+import urllib.error
 
 def get_version():
     """Get version from VERSION file"""
@@ -21,6 +24,7 @@ def get_version():
 class SimpleS3FloodTester:
     def __init__(self):
         self.config = {}
+        self.s5cmd_path = self.ensure_s5cmd()
         
     def print_header(self):
         print("="*50)
@@ -67,22 +71,119 @@ class SimpleS3FloodTester:
         except Exception as e:
             print(f"Error saving config: {e}")
             
+    def ensure_s5cmd(self):
+        """Ensure s5cmd is available and working on Windows"""
+        tools_dir = Path("tools")
+        tools_dir.mkdir(exist_ok=True)
+        
+        # Try different possible s5cmd locations and names
+        possible_paths = [
+            tools_dir / "s5cmd.exe",
+            tools_dir / "s5cmd",
+            Path("s5cmd.exe"),
+            Path("s5cmd")
+        ]
+        
+        # Check if any existing s5cmd works
+        for s5cmd_path in possible_paths:
+            if s5cmd_path.exists():
+                try:
+                    result = subprocess.run([str(s5cmd_path), "version"], 
+                                           capture_output=True, text=True, timeout=10)
+                    if result.returncode == 0:
+                        print(f"[INFO] Using existing s5cmd: {s5cmd_path}")
+                        return str(s5cmd_path)
+                except Exception:
+                    continue
+        
+        # Try system s5cmd
+        try:
+            result = subprocess.run(["s5cmd", "version"], capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                print("[INFO] Using system s5cmd")
+                return "s5cmd"
+        except Exception:
+            pass
+            
+        # Download s5cmd for Windows
+        print("[INFO] s5cmd not found or not working. Downloading for Windows...")
+        return self.download_s5cmd_windows()
+        
+    def download_s5cmd_windows(self):
+        """Download appropriate s5cmd version for Windows"""
+        tools_dir = Path("tools")
+        tools_dir.mkdir(exist_ok=True)
+        
+        # Detect Windows architecture
+        arch = platform.machine().lower()
+        if arch in ['amd64', 'x86_64']:
+            s5cmd_arch = "64bit"
+        else:
+            s5cmd_arch = "32bit"
+            
+        version = "v2.2.2"  # Latest stable version
+        filename = f"s5cmd_{version}_Windows-{s5cmd_arch}.zip"
+        url = f"https://github.com/peak/s5cmd/releases/download/{version}/{filename}"
+        
+        zip_path = tools_dir / filename
+        s5cmd_exe = tools_dir / "s5cmd.exe"
+        
+        try:
+            print(f"[INFO] Downloading s5cmd {version} for Windows {s5cmd_arch}...")
+            urllib.request.urlretrieve(url, zip_path)
+            
+            print("[INFO] Extracting s5cmd...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(tools_dir)
+                
+            # Clean up zip file
+            zip_path.unlink()
+            
+            if s5cmd_exe.exists():
+                print(f"[SUCCESS] s5cmd installed at {s5cmd_exe}")
+                return str(s5cmd_exe)
+            else:
+                print("[ERROR] s5cmd extraction failed")
+                return None
+                
+        except Exception as e:
+            print(f"[ERROR] Failed to download s5cmd: {e}")
+            print("[INFO] You can manually download s5cmd from:")
+            print("https://github.com/peak/s5cmd/releases")
+            return None
+            
     def test_s5cmd(self):
         """Test s5cmd connectivity"""
+        if not self.s5cmd_path:
+            print("[ERROR] s5cmd is not available")
+            print("Please manually install s5cmd or check the installation.")
+            return False
+            
         try:
             env = os.environ.copy()
             env["AWS_ACCESS_KEY_ID"] = self.config["access_key"]
             env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
             
-            cmd = ["s5cmd", "--endpoint-url", self.config["s3_urls"][0], "ls"]
+            cmd = [self.s5cmd_path, "--endpoint-url", self.config["s3_urls"][0], "ls"]
+            print(f"[INFO] Running: {' '.join(cmd)}")
+            
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
             
             if result.returncode == 0:
                 print("[SUCCESS] S3 connection test passed")
+                if result.stdout.strip():
+                    print(f"S3 listing output:\n{result.stdout}")
                 return True
             else:
-                print(f"[ERROR] S3 connection failed: {result.stderr}")
+                print(f"[ERROR] S3 connection failed (exit code {result.returncode})")
+                if result.stderr:
+                    print(f"Error details: {result.stderr}")
+                if result.stdout:
+                    print(f"Output: {result.stdout}")
                 return False
+        except subprocess.TimeoutExpired:
+            print("[ERROR] s5cmd test timed out (30 seconds)")
+            return False
         except Exception as e:
             print(f"[ERROR] s5cmd test failed: {e}")
             return False
