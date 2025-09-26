@@ -18,7 +18,7 @@ echo [INFO] Starting S3 Flood...
 echo [INFO] Press Ctrl+C to exit
 echo.
 
-python s3_flood_windows_final.py
+python s3_flood_windows.py
 if %ERRORLEVEL% neq 0 (
     echo.
     echo [ERROR] Failed to start S3 Flood!
