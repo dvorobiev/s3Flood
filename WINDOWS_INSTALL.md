@@ -1,40 +1,50 @@
-# Инструкция по установке S3 Flood на Windows
+# S3 Flood Windows Installation Guide
 
-## ПОЛНОСТЬЮ автоматическая установка (Рекомендуется!)
+## FULLY AUTOMATED INSTALLATION (Recommended!)
 
-1. Скачайте проект с GitHub:
-   - Перейдите на https://github.com/dvorobiev/s3Flood
-   - Нажмите "Code" → "Download ZIP"
-   - Распакуйте архив в удобную папку
+1. Download the project from GitHub:
+   - Go to https://github.com/dvorobiev/s3Flood
+   - Click "Code" → "Download ZIP"
+   - Extract the archive to a convenient folder
 
-2. Запустите автоматическую установку:
-   - Откройте папку с проектом
-   - Нажмите ПКМ на `install.bat` → "Запуск от имени администратора"
-   - Дождитесь завершения установки (может занять 5-10 минут)
+2. Run automatic installation:
+   - Open the project folder
+   - **Right-click** on `install.bat` → "Run as administrator"
+   - Wait for installation to complete (may take 5-10 minutes)
 
-**Что установит скрипт:**
-- Python 3.11 (автоматически)
-- Все необходимые Python библиотеки
-- s5cmd (инструмент для S3 операций)
+**What the script will install:**
+- Python 3.11 (automatically)
+- All required Python libraries
+- s5cmd (S3 command-line tool)
 
-## Запуск
+## Running the Application
 
-- Дважды щелкните на `run.bat`
-- Или откройте командную строку и выполните: `python s3_flood.py`
+- Double-click `run.bat`
+- Or open command prompt and execute: `python s3_flood.py`
 
-## Если возникли проблемы
+## If Problems Occur
 
-1. **Ошибка прав администратора:**
-   - Обязательно запускайте install.bat от имени администратора
+1. **Administrator rights error:**
+   - You MUST run install.bat as administrator
 
-2. **Ошибка скачивания:**
-   - Проверьте интернет-соединение
-   - Отключите антивирус на время установки
+2. **Download errors:**
+   - Check internet connection
+   - Temporarily disable antivirus during installation
 
-3. **Ручная установка (в крайнем случае):**
+3. **Manual installation (last resort):**
    ```cmd
-   # Установите Python с python.org
+   # Install Python from python.org
    pip install -r requirements.txt
-   # Скачайте s5cmd с github.com/peak/s5cmd/releases
+   # Download s5cmd from github.com/peak/s5cmd/releases
    ```
+
+## Encoding Fix
+
+The new version of install.bat and run.bat should display correctly in Windows console.
+If you still see garbled text, your Windows console might need encoding adjustment.
+
+## Configuration
+
+- Run: `python s3_flood.py --config`
+- Or edit the `config.yaml` file manually
 
