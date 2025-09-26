@@ -46,13 +46,6 @@ if %errorlevel% equ 0 (
         echo [INFO] This may have library compatibility issues...
         echo.
         python s3_flood.py
-        if %errorlevel% neq 0 (
-            echo.
-            echo [WARNING] Main version failed, trying simple compatible version...
-            echo [INFO] This often happens on older Windows systems
-            echo.
-            python s3_flood_simple.py
-        )
     )
 )
 

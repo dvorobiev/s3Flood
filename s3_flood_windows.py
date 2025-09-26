@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-S3 Flood Windows Version - Полностью совместимая версия для Windows
-Эта версия работает без rich/questionary библиотек и решает проблемы с Windows console
+S3 Flood - Windows Edition
+Единственная Windows версия с полной функциональностью
 """
 
 import os
@@ -14,7 +14,6 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 import time
-import threading
 import random
 import shutil
 import signal
@@ -29,7 +28,7 @@ def get_version():
     except FileNotFoundError:
         return "development"
 
-class WindowsS3FloodTester:
+class S3FloodWindows:
     def __init__(self):
         self.config = {}
         self.s5cmd_path = self.ensure_s5cmd()
@@ -42,85 +41,77 @@ class WindowsS3FloodTester:
             "total_download_time": 0.0,
             "total_delete_time": 0.0,
             "total_bytes_uploaded": 0,
-            "total_bytes_downloaded": 0,
-            "upload_times": []
+            "total_bytes_downloaded": 0
         }
         self.running = True
         self.local_temp_dir = Path("./s3_temp_files")
         
-        # Register signal handler for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
+        # Register signal handler
+        try:
+            signal.signal(signal.SIGINT, self._signal_handler)
+        except:
+            pass
         
     def _signal_handler(self, signum, frame):
         """Handle Ctrl+C gracefully"""
         try:
-            print("\n[INFO] Stopping S3 Flood testing...")
+            print("\\n[INFO] Stopping S3 Flood testing...")
         except:
-            pass  # Ignore print errors during shutdown
+            pass
         self.running = False
+        
+    def safe_print(self, message):
+        """Safe print that handles console encoding issues"""
+        try:
+            print(message)
+        except:
+            try:
+                print(message.encode('ascii', 'replace').decode('ascii'))
+            except:
+                print("Console output error")
         
     def print_header(self):
         try:
-            print("="*60)
-            print(f"S3 Flood v{get_version()} - Windows Compatible Version")
-            print("="*60)
-            print()
+            self.safe_print("=" * 60)
+            self.safe_print(f"S3 Flood v{get_version()} - Windows Edition")
+            self.safe_print("=" * 60)
+            self.safe_print("")
         except:
-            # Fallback if console has issues
-            print("S3 Flood - Windows Compatible Version")
-            print()
+            self.safe_print("S3 Flood - Windows Edition")
+            self.safe_print("")
         
     def ensure_s5cmd(self):
-        """Ensure s5cmd is available and working on Windows"""
+        """Ensure s5cmd is available and working"""
         tools_dir = Path("tools")
         tools_dir.mkdir(exist_ok=True)
         
-        # Try different possible s5cmd locations and names
-        possible_paths = [
-            tools_dir / "s5cmd.exe",
-            tools_dir / "s5cmd",
-            Path("s5cmd.exe"),
-            Path("s5cmd")
-        ]
-        
-        # Check if any existing s5cmd works
-        for s5cmd_path in possible_paths:
-            if s5cmd_path.exists():
+        # Try existing s5cmd
+        for s5cmd_path in [tools_dir / "s5cmd.exe", tools_dir / "s5cmd", "s5cmd"]:
+            if s5cmd_path.exists() or (isinstance(s5cmd_path, str) and s5cmd_path == "s5cmd"):
                 try:
-                    result = subprocess.run([str(s5cmd_path), "version"], 
+                    test_path = str(s5cmd_path) if s5cmd_path != "s5cmd" else "s5cmd"
+                    result = subprocess.run([test_path, "version"], 
                                            capture_output=True, text=True, timeout=10)
                     if result.returncode == 0:
-                        print(f"[INFO] Using existing s5cmd: {s5cmd_path}")
-                        return str(s5cmd_path)
+                        self.safe_print(f"[INFO] Using s5cmd: {test_path}")
+                        return test_path
                 except Exception:
                     continue
         
-        # Try system s5cmd
-        try:
-            result = subprocess.run(["s5cmd", "version"], capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                print("[INFO] Using system s5cmd")
-                return "s5cmd"
-        except Exception:
-            pass
-            
         # Download s5cmd for Windows
-        print("[INFO] s5cmd not found or not working. Downloading for Windows...")
+        self.safe_print("[INFO] s5cmd not found. Downloading for Windows...")
         return self.download_s5cmd_windows()
         
     def download_s5cmd_windows(self):
-        """Download appropriate s5cmd version for Windows"""
+        """Download s5cmd for Windows"""
         tools_dir = Path("tools")
         tools_dir.mkdir(exist_ok=True)
         
-        # Detect Windows architecture
+        # Detect architecture
         arch = platform.machine().lower()
-        if arch in ['amd64', 'x86_64']:
-            s5cmd_arch = "64bit"
-        else:
-            s5cmd_arch = "32bit"
+        s5cmd_arch = "64bit" if arch in ['amd64', 'x86_64'] else "32bit"
             
-        version = "v2.2.2"  # Latest stable version
+        version = "v2.2.2"
         filename = f"s5cmd_{version}_Windows-{s5cmd_arch}.zip"
         url = f"https://github.com/peak/s5cmd/releases/download/{version}/{filename}"
         
@@ -128,31 +119,30 @@ class WindowsS3FloodTester:
         s5cmd_exe = tools_dir / "s5cmd.exe"
         
         try:
-            print(f"[INFO] Downloading s5cmd {version} for Windows {s5cmd_arch}...")
+            self.safe_print(f"[INFO] Downloading s5cmd {version} for Windows {s5cmd_arch}...")
             urllib.request.urlretrieve(url, zip_path)
             
-            print("[INFO] Extracting s5cmd...")
+            self.safe_print("[INFO] Extracting s5cmd...")
             with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                 zip_ref.extractall(tools_dir)
                 
-            # Clean up zip file
             zip_path.unlink()
             
             if s5cmd_exe.exists():
-                print(f"[SUCCESS] s5cmd installed: {s5cmd_exe}")
+                self.safe_print(f"[SUCCESS] s5cmd installed: {s5cmd_exe}")
                 return str(s5cmd_exe)
             else:
-                print("[ERROR] Failed to extract s5cmd")
+                self.safe_print("[ERROR] Failed to extract s5cmd")
                 return None
                 
         except Exception as e:
-            print(f"[ERROR] Failed to download s5cmd: {e}")
-            print("[INFO] You can manually download s5cmd from:")
-            print("https://github.com/peak/s5cmd/releases")
+            self.safe_print(f"[ERROR] Failed to download s5cmd: {e}")
+            self.safe_print("[INFO] You can manually download s5cmd from:")
+            self.safe_print("https://github.com/peak/s5cmd/releases")
             return None
             
     def load_config(self, config_path="config.yaml"):
-        """Load configuration from YAML file"""
+        """Load configuration"""
         default_config = {
             "s3_urls": ["http://localhost:9000"],
             "access_key": "minioadmin",
@@ -177,27 +167,25 @@ class WindowsS3FloodTester:
                     if key not in self.config:
                         self.config[key] = value
         except FileNotFoundError:
-            print(f"Config file {config_path} not found. Creating default config.")
+            self.safe_print(f"Config file {config_path} not found. Creating default config.")
             self.config = default_config
             self.save_config(config_path)
             
-        # Set local_temp_dir from config
         self.local_temp_dir = Path(self.config["test_files_directory"])
             
     def save_config(self, config_path="config.yaml"):
-        """Save configuration to YAML file"""
+        """Save configuration"""
         try:
             with open(config_path, 'w') as f:
                 yaml.dump(self.config, f, default_flow_style=False, sort_keys=False)
-            print(f"Configuration saved to {config_path}")
+            self.safe_print(f"Configuration saved to {config_path}")
         except Exception as e:
-            print(f"[ERROR] Error saving config: {e}")
+            self.safe_print(f"[ERROR] Error saving config: {e}")
             
     def test_s5cmd(self):
         """Test s5cmd connectivity"""
         if not self.s5cmd_path:
-            print("[ERROR] s5cmd not available")
-            print("Please install s5cmd manually or check the installation.")
+            self.safe_print("[ERROR] s5cmd not available")
             return False
             
         try:
@@ -206,81 +194,58 @@ class WindowsS3FloodTester:
             env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
             
             cmd = [self.s5cmd_path, "--endpoint-url", self.config["s3_urls"][0], "ls"]
-            print(f"[INFO] Выполняю: {' '.join(cmd)}")
+            self.safe_print(f"[INFO] Running: {' '.join(cmd)}")
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, env=env)
             
             if result.returncode == 0:
-                print("[SUCCESS] Проверка S3 соединения прошла успешно")
+                self.safe_print("[SUCCESS] S3 connection test passed")
                 if result.stdout.strip():
-                    print(f"Вывод S3 листинга:\\n{result.stdout}")
+                    self.safe_print(f"S3 listing output:\\n{result.stdout}")
                 return True
             else:
-                print(f"[ERROR] Проверка S3 соединения не удалась (код выхода {result.returncode})")
+                self.safe_print(f"[ERROR] S3 connection failed (exit code {result.returncode})")
                 if result.stderr:
-                    print(f"Детали ошибки: {result.stderr}")
-                if result.stdout:
-                    print(f"Вывод: {result.stdout}")
+                    self.safe_print(f"Error details: {result.stderr}")
                 return False
-        except subprocess.TimeoutExpired:
-            print("[ERROR] Проверка s5cmd превысила время ожидания (30 секунд)")
-            return False
         except Exception as e:
-            print(f"[ERROR] Ошибка проверки s5cmd: {e}")
+            self.safe_print(f"[ERROR] s5cmd test failed: {e}")
             return False
             
     def create_test_files(self) -> List[Path]:
-        """Create test files of different sizes"""
+        """Create test files"""
         if self.local_temp_dir.exists():
             shutil.rmtree(self.local_temp_dir)
         self.local_temp_dir.mkdir(exist_ok=True, parents=True)
         
         file_list = []
         
-        print("[INFO] Создаю тестовые файлы...")
+        self.safe_print("[INFO] Creating test files...")
         
-        # Create small files
-        small_config = self.config["file_groups"]["small"]
-        for i in range(small_config["count"]):
-            size_mb = random.randint(1, small_config["max_size_mb"])
-            filename = self.local_temp_dir / f"small_{i}_{size_mb}MB.txt"
-            self._create_file(filename, size_mb)
-            file_list.append(filename)
+        # Create files from config
+        for group_name, group_config in self.config["file_groups"].items():
+            for i in range(group_config["count"]):
+                size_mb = random.randint(1, group_config["max_size_mb"])
+                filename = self.local_temp_dir / f"{group_name}_{i}_{size_mb}MB.txt"
+                self._create_file(filename, size_mb)
+                file_list.append(filename)
             
-        # Create medium files
-        medium_config = self.config["file_groups"]["medium"]
-        for i in range(medium_config["count"]):
-            size_mb = random.randint(small_config["max_size_mb"] + 1, medium_config["max_size_mb"])
-            filename = self.local_temp_dir / f"medium_{i}_{size_mb}MB.txt"
-            self._create_file(filename, size_mb)
-            file_list.append(filename)
-            
-        # Create large files
-        large_config = self.config["file_groups"]["large"]
-        for i in range(large_config["count"]):
-            size_mb = random.randint(medium_config["max_size_mb"] + 1, large_config["max_size_mb"])
-            filename = self.local_temp_dir / f"large_{i}_{size_mb}MB.txt"
-            self._create_file(filename, size_mb)
-            file_list.append(filename)
-            
-        print(f"[SUCCESS] Создано {len(file_list)} тестовых файлов")
+        self.safe_print(f"[SUCCESS] Created {len(file_list)} test files")
         return file_list
         
     def _create_file(self, filename: Path, size_mb: int):
-        """Create a file of specified size in MB"""
+        """Create a file of specified size"""
         try:
             with open(filename, 'wb') as f:
-                # Write in chunks of 1MB
                 chunk_size = 1024 * 1024  # 1MB
                 chunk_data = b'x' * chunk_size
-                
                 for _ in range(size_mb):
                     f.write(chunk_data)
         except Exception as e:
-            print(f"[ERROR] Не удалось создать файл {filename}: {e}")
+            self.safe_print(f"[ERROR] Failed to create file {filename}: {e}")
             
-    def run_s5cmd_upload(self, local_file: Path, bucket_name: str) -> bool:
-        """Upload file using s5cmd"""
+    def run_s5cmd_command(self, operation: str, local_path: str = "", s3_path: str = "") -> bool:
+        """Run s5cmd command"""
         if not self.s5cmd_path:
             return False
             
@@ -289,36 +254,40 @@ class WindowsS3FloodTester:
             env["AWS_ACCESS_KEY_ID"] = self.config["access_key"]
             env["AWS_SECRET_ACCESS_KEY"] = self.config["secret_key"]
             
-            s3_url = self.config["s3_urls"][0]  # Use first URL for simplicity
-            s3_path = f"s3://{bucket_name}/{local_file.name}"
+            s3_url = self.config["s3_urls"][0]
             
-            cmd = [
-                self.s5cmd_path,
-                "--endpoint-url", s3_url,
-                "cp", str(local_file), s3_path
-            ]
+            if operation == "upload":
+                cmd = [self.s5cmd_path, "--endpoint-url", s3_url, "cp", local_path, s3_path]
+            elif operation == "download":
+                null_device = "nul" if platform.system() == "Windows" else "/dev/null"
+                cmd = [self.s5cmd_path, "--endpoint-url", s3_url, "cp", s3_path, null_device]
+            elif operation == "delete":
+                cmd = [self.s5cmd_path, "--endpoint-url", s3_url, "rm", s3_path]
+            else:
+                return False
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env=env)
             return result.returncode == 0
             
         except Exception as e:
-            print(f"[ERROR] Ошибка загрузки {local_file.name}: {e}")
+            self.safe_print(f"[ERROR] s5cmd {operation} failed: {e}")
             return False
             
     def run_test_cycle(self):
-        """Run a single test cycle"""
-        print("\\n" + "="*50)
-        print("Начинаю цикл S3 Flood тестирования")
-        print("="*50)
+        """Run complete test cycle with original logic"""
+        self.safe_print("")
+        self.safe_print("=" * 50)
+        self.safe_print("Starting S3 Flood Test Cycle")
+        self.safe_print("=" * 50)
         
-        # Create test files
+        # Step 1: Create test files
         test_files = self.create_test_files()
         if not test_files:
-            print("[ERROR] Не удалось создать тестовые файлы")
+            self.safe_print("[ERROR] Failed to create test files")
             return
-            
-        # Upload files
-        print(f"\\n[INFO] Загружаю {len(test_files)} файлов...")
+        
+        # Step 2: Upload ALL files
+        self.safe_print(f"\\n[INFO] Uploading ALL {len(test_files)} files to S3...")
         upload_start = time.time()
         uploaded_files = []
         
@@ -326,102 +295,188 @@ class WindowsS3FloodTester:
             if not self.running:
                 break
                 
-            print(f"Загружаю {file_path.name}...")
-            if self.run_s5cmd_upload(file_path, self.config["bucket_name"]):
-                uploaded_files.append(file_path)
+            s3_path = f"s3://{self.config['bucket_name']}/{file_path.name}"
+            self.safe_print(f"Uploading {file_path.name}...")
+            
+            if self.run_s5cmd_command("upload", str(file_path), s3_path):
+                uploaded_files.append(s3_path)
                 self.stats["files_uploaded"] += 1
                 self.stats["total_bytes_uploaded"] += file_path.stat().st_size
             else:
-                print(f"[ERROR] Не удалось загрузить {file_path.name}")
+                self.safe_print(f"[ERROR] Failed to upload {file_path.name}")
                 
         upload_time = time.time() - upload_start
         self.stats["total_upload_time"] += upload_time
+        self.safe_print(f"[SUCCESS] Uploaded {len(uploaded_files)} files in {upload_time:.2f} seconds")
         
-        print(f"\\n[SUCCESS] Загружено {len(uploaded_files)} файлов за {upload_time:.2f} секунд")
+        # Step 3: Concurrent read/write operations in batches
+        if uploaded_files and self.running:
+            batch_size = self.config["parallel_threads"]
+            self.safe_print(f"\\n[INFO] Starting concurrent read/write operations in batches of {batch_size}...")
+            
+            for i in range(0, len(uploaded_files), batch_size):
+                if not self.running:
+                    break
+                    
+                batch_files = uploaded_files[i:i+batch_size]
+                
+                # Split batch for read/write
+                random.shuffle(batch_files)
+                mid_point = max(1, len(batch_files) // 2)  # Ensure at least 1 file per operation
+                read_files = batch_files[:mid_point]
+                write_files = batch_files[mid_point:] if len(batch_files) > 1 else batch_files
+                
+                batch_num = i//batch_size + 1
+                self.safe_print(f"\\nBatch {batch_num}: {len(read_files)} reads, {len(write_files)} writes")
+                
+                # Read operations
+                if read_files:
+                    self.safe_print(f"[INFO] Reading {len(read_files)} files...")
+                    read_start = time.time()
+                    read_success = 0
+                    
+                    for s3_path in read_files:
+                        if not self.running:
+                            break
+                        file_name = s3_path.split('/')[-1]
+                        self.safe_print(f"Reading {file_name}...")
+                        if self.run_s5cmd_command("download", "", s3_path):
+                            read_success += 1
+                            self.stats["files_downloaded"] += 1
+                        else:
+                            self.safe_print(f"[ERROR] Failed to read {file_name}")
+                    
+                    read_time = time.time() - read_start
+                    self.stats["total_download_time"] += read_time
+                    self.safe_print(f"[SUCCESS] Read {read_success} files in {read_time:.2f} seconds")
+                
+                # Write operations (re-upload)
+                if write_files:
+                    self.safe_print(f"[INFO] Re-writing {len(write_files)} files...")
+                    write_start = time.time()
+                    write_success = 0
+                    
+                    for s3_path in write_files:
+                        if not self.running:
+                            break
+                        
+                        file_name = s3_path.split('/')[-1]
+                        temp_file = self.local_temp_dir / f"rewrite_{file_name}"
+                        
+                        # Create temp file
+                        try:
+                            with open(temp_file, 'wb') as f:
+                                f.write(b"Re-write test data " * 1000)  # Small file for re-write
+                        except Exception as e:
+                            self.safe_print(f"[ERROR] Failed to create temp file: {e}")
+                            continue
+                        
+                        self.safe_print(f"Re-writing {file_name}...")
+                        if self.run_s5cmd_command("upload", str(temp_file), s3_path):
+                            write_success += 1
+                        else:
+                            self.safe_print(f"[ERROR] Failed to re-write {file_name}")
+                        
+                        # Clean up
+                        try:
+                            temp_file.unlink()
+                        except:
+                            pass
+                    
+                    write_time = time.time() - write_start
+                    self.safe_print(f"[SUCCESS] Re-wrote {write_success} files in {write_time:.2f} seconds")
+        
+        # Step 4: Delete all files
+        if uploaded_files and self.running:
+            self.safe_print(f"\\n[INFO] Deleting ALL {len(uploaded_files)} files from S3...")
+            delete_start = time.time()
+            delete_success = 0
+            
+            for s3_path in uploaded_files:
+                if not self.running:
+                    break
+                file_name = s3_path.split('/')[-1]
+                self.safe_print(f"Deleting {file_name}...")
+                if self.run_s5cmd_command("delete", "", s3_path):
+                    delete_success += 1
+                    self.stats["files_deleted"] += 1
+                else:
+                    self.safe_print(f"[ERROR] Failed to delete {file_name}")
+            
+            delete_time = time.time() - delete_start
+            self.stats["total_delete_time"] += delete_time
+            self.safe_print(f"[SUCCESS] Deleted {delete_success} files in {delete_time:.2f} seconds")
         
         # Clean up local files
         if self.local_temp_dir.exists():
             shutil.rmtree(self.local_temp_dir)
+            self.safe_print("[INFO] Cleaned up temporary files")
             
         self.stats["cycles_completed"] += 1
-        print("\\n" + "="*50)
-        print("Цикл тестирования завершен!")
-        print("="*50)
+        self.safe_print("")
+        self.safe_print("=" * 50)
+        self.safe_print("Test Cycle Completed!")
+        self.safe_print("=" * 50)
         
     def show_statistics(self):
-        """Display test statistics"""
-        print("\\n" + "="*50)
-        print("S3 Flood Статистика тестирования")
-        print("="*50)
+        """Display statistics"""
+        self.safe_print("")
+        self.safe_print("=" * 50)
+        self.safe_print("S3 Flood Test Statistics")
+        self.safe_print("=" * 50)
         
-        print(f"Завершенных циклов: {self.stats['cycles_completed']}")
-        print(f"Загруженных файлов: {self.stats['files_uploaded']}")
-        print(f"Скачанных файлов: {self.stats['files_downloaded']}")
-        print(f"Удаленных файлов: {self.stats['files_deleted']}")
-        print(f"Общее время загрузки: {self.stats['total_upload_time']:.2f} сек")
-        print(f"Общее время скачивания: {self.stats['total_download_time']:.2f} сек")
-        print(f"Общее время удаления: {self.stats['total_delete_time']:.2f} сек")
+        self.safe_print(f"Cycles completed: {self.stats['cycles_completed']}")
+        self.safe_print(f"Files uploaded: {self.stats['files_uploaded']}")
+        self.safe_print(f"Files downloaded: {self.stats['files_downloaded']}")
+        self.safe_print(f"Files deleted: {self.stats['files_deleted']}")
+        self.safe_print(f"Total upload time: {self.stats['total_upload_time']:.2f} sec")
+        self.safe_print(f"Total download time: {self.stats['total_download_time']:.2f} sec")
+        self.safe_print(f"Total delete time: {self.stats['total_delete_time']:.2f} sec")
         
         # Calculate speeds
         if self.stats['total_upload_time'] > 0:
             upload_speed_mbps = (self.stats['total_bytes_uploaded'] / (1024*1024)) / self.stats['total_upload_time']
-            print(f"Средняя скорость загрузки: {upload_speed_mbps:.2f} MB/сек")
-            
-        if self.stats['total_download_time'] > 0:
-            download_speed_mbps = (self.stats['total_bytes_downloaded'] / (1024*1024)) / self.stats['total_download_time']
-            print(f"Средняя скорость скачивания: {download_speed_mbps:.2f} MB/сек")
-            
-        print("="*50)
+            self.safe_print(f"Average upload speed: {upload_speed_mbps:.2f} MB/sec")
+        
+        self.safe_print("=" * 50)
         
     def interactive_config(self):
-        """Simple configuration without rich"""
-        print("\\nКонфигурация S3 Flood")
-        print("-" * 30)
+        """Simple configuration"""
+        self.safe_print("")
+        self.safe_print("S3 Flood Configuration")
+        self.safe_print("-" * 30)
         
-        # S3 URLs
-        current_urls = ",".join(self.config.get("s3_urls", ["http://localhost:9000"]))
-        urls_input = input(f"S3 Endpoint URLs [{current_urls}]: ").strip()
-        if urls_input:
-            self.config["s3_urls"] = [url.strip() for url in urls_input.split(",")]
-            
-        # Access credentials
-        access_key = input(f"Access Key [{self.config.get('access_key', 'minioadmin')}]: ").strip()
-        if access_key:
-            self.config["access_key"] = access_key
-            
-        secret_key = input(f"Secret Key [{self.config.get('secret_key', 'minioadmin')}]: ").strip()
-        if secret_key:
-            self.config["secret_key"] = secret_key
-            
-        # Bucket name
-        bucket = input(f"Bucket Name [{self.config.get('bucket_name', 'test-bucket')}]: ").strip()
-        if bucket:
-            self.config["bucket_name"] = bucket
-            
-        # Cluster mode
-        cluster_choice = input(f"Cluster Mode? (y/n) [{self.config.get('cluster_mode', False)}]: ").strip().lower()
-        if cluster_choice in ['y', 'yes', 'д', 'да']:
-            self.config["cluster_mode"] = True
-        elif cluster_choice in ['n', 'no', 'н', 'нет']:
-            self.config["cluster_mode"] = False
-            
-        # Parallel threads
         try:
-            threads_input = input(f"Parallel Threads [{self.config.get('parallel_threads', 5)}]: ").strip()
-            if threads_input:
-                self.config["parallel_threads"] = int(threads_input)
-        except ValueError:
-            print("[WARNING] Неверное число потоков, оставляю текущее значение")
+            # S3 URLs
+            current_urls = ",".join(self.config.get("s3_urls", ["http://localhost:9000"]))
+            urls_input = input(f"S3 Endpoint URLs [{current_urls}]: ").strip()
+            if urls_input:
+                self.config["s3_urls"] = [url.strip() for url in urls_input.split(",")]
             
-        # Save configuration
-        save_choice = input("Сохранить конфигурацию? (y/n) [y]: ").strip().lower()
-        if save_choice not in ['n', 'no', 'н', 'нет']:
-            self.save_config()
+            # Credentials
+            access_key = input(f"Access Key [{self.config.get('access_key', 'minioadmin')}]: ").strip()
+            if access_key:
+                self.config["access_key"] = access_key
+                
+            secret_key = input(f"Secret Key [{self.config.get('secret_key', 'minioadmin')}]: ").strip()
+            if secret_key:
+                self.config["secret_key"] = secret_key
+                
+            bucket = input(f"Bucket Name [{self.config.get('bucket_name', 'test-bucket')}]: ").strip()
+            if bucket:
+                self.config["bucket_name"] = bucket
+            
+            # Save
+            save_choice = input("Save configuration? (y/n) [y]: ").strip().lower()
+            if save_choice not in ['n', 'no']:
+                self.save_config()
+        except:
+            pass
             
     def run_infinite_loop(self):
         """Run infinite test loop"""
-        print("Запуск бесконечного цикла тестирования...")
-        print("Нажмите Ctrl+C для остановки")
+        self.safe_print("Starting infinite test loop...")
+        self.safe_print("Press Ctrl+C to stop")
         
         try:
             while self.running:
@@ -430,94 +485,90 @@ class WindowsS3FloodTester:
                 if not self.running:
                     break
                     
-                # Wait between cycles
                 delay = self.config.get("cycle_delay_seconds", 15)
-                print(f"\\n[INFO] Жду {delay} секунд до следующего цикла...")
+                self.safe_print(f"\\n[INFO] Waiting {delay} seconds until next cycle...")
                 time.sleep(delay)
                 
         except KeyboardInterrupt:
-            print("\\n[INFO] Остановка по Ctrl+C...")
+            self.safe_print("\\n[INFO] Stopped by Ctrl+C...")
             self.running = False
             
     def main_menu(self):
-        """Simple main menu"""
+        """Main menu"""
         while True:
             self.print_header()
-            print("Главное меню:")
-            print("1. Проверить S3 соединение")
-            print("2. Настроить")
-            print("3. Запустить быстрый тест")
-            print("4. Запустить бесконечный цикл")
-            print("5. Показать статистику")
-            print("6. Выход")
-            print()
+            self.safe_print("Main Menu:")
+            self.safe_print("1. Test S3 Connection")
+            self.safe_print("2. Configure")
+            self.safe_print("3. Run Quick Test")
+            self.safe_print("4. Run Infinite Loop")
+            self.safe_print("5. Show Statistics")
+            self.safe_print("6. Exit")
+            self.safe_print("")
             
             try:
-                choice = input("Выберите опцию (1-6): ").strip()
+                choice = input("Select option (1-6): ").strip()
                 
                 if choice == "1":
-                    print("\\nПроверяю S3 соединение...")
+                    self.safe_print("\\nTesting S3 connection...")
                     self.test_s5cmd()
-                    input("\\nНажмите Enter для продолжения...")
+                    input("\\nPress Enter to continue...")
                     
                 elif choice == "2":
                     self.interactive_config()
                     
                 elif choice == "3":
-                    print("\\n[INFO] Запуск одного цикла тестирования...")
+                    self.safe_print("\\n[INFO] Running single test cycle...")
                     self.run_test_cycle()
-                    input("\\nНажмите Enter для продолжения...")
+                    input("\\nPress Enter to continue...")
                     
                 elif choice == "4":
                     self.run_infinite_loop()
                     
                 elif choice == "5":
                     self.show_statistics()
-                    input("\\nНажмите Enter для продолжения...")
+                    input("\\nPress Enter to continue...")
                     
                 elif choice == "6":
-                    print("\\nДо свидания!")
+                    self.safe_print("\\nGoodbye!")
                     break
                     
                 else:
-                    print("\\n[ERROR] Неверный выбор. Пожалуйста, введите 1-6.")
-                    input("Нажмите Enter для продолжения...")
+                    self.safe_print("\\n[ERROR] Invalid choice. Please enter 1-6.")
+                    input("Press Enter to continue...")
                     
             except (KeyboardInterrupt, EOFError):
-                print("\\n\\nВыход...")
+                self.safe_print("\\n\\nExiting...")
                 break
                 
 def main():
-    # Windows console setup - simplified and safer
+    # Windows console setup
     if platform.system() == "Windows":
         try:
-            # Set console to UTF-8 only if needed
-            import sys
             if sys.stdout.encoding.lower() != 'utf-8':
                 os.system('chcp 65001 >nul 2>&1')
         except:
-            pass  # Ignore encoding setup errors
-        
-        # Basic environment setup
+            pass
         os.environ.setdefault("PYTHONIOENCODING", "utf-8")
         
-    # Use simple print statements without special characters
     try:
-        print("S3 Flood - Windows Compatible Version")
-        print("="*40)
+        print("S3 Flood - Windows Edition")
+        print("=" * 40)
         print()
-        print("This version is fully compatible with Windows")
-        print("and works without rich/questionary libraries.")
+        print("Single unified version for Windows compatibility")
         print()
         
-        tester = WindowsS3FloodTester()
+        tester = S3FloodWindows()
         tester.load_config()
         tester.main_menu()
         
     except Exception as e:
         print(f"Error starting application: {e}")
         print("Please check your Python installation.")
-        input("Press Enter to exit...")
+        try:
+            input("Press Enter to exit...")
+        except:
+            pass
 
 if __name__ == "__main__":
     main()
