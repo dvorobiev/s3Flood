@@ -28,31 +28,37 @@
 
 ## Troubleshooting Console Issues
 
-**If you see prompt_toolkit/questionary errors:**
+**If you see prompt_toolkit/questionary or rich library errors:**
 
-1. **Try PowerShell version:**
-   ```powershell
-   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-   .\run.ps1
-   ```
+### SOLUTION 1: Use Simple Compatible Version (Recommended)
+```cmd
+run_simple.bat
+```
+This version works on ANY Windows system without console library issues.
 
-2. **Try simple launcher:**
-   ```cmd
-   run_simple.bat
-   ```
+### SOLUTION 2: Test Your System Compatibility
+```cmd
+test_compatibility.bat
+```
+This will tell you which version to use.
 
-3. **Use Windows Terminal (if available):**
-   - Install from Microsoft Store
-   - Run.bat will automatically detect and use it
+### SOLUTION 3: Try PowerShell
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+.\run.ps1
+```
 
-4. **Manual workaround:**
-   ```cmd
-   set PYTHONIOENCODING=utf-8
-   set TERM=dumb
-   python s3_flood.py
-   ```
+### SOLUTION 4: Enhanced Launcher
+```cmd
+run.bat
+```
+This automatically tries main version, then falls back to simple version.
 
-**The application includes automatic fallback for console compatibility issues.**
+### Available Launchers:
+- **run_simple.bat** - Always works, basic functionality
+- **run.bat** - Tries advanced version, falls back to simple
+- **run.ps1** - PowerShell version
+- **test_compatibility.bat** - Tests what works on your system
 
 ## If Problems Occur
 

@@ -38,7 +38,15 @@ if %errorlevel% equ 0 (
     echo [INFO] Windows Terminal detected, using improved console...
     wt -w 0 cmd /c "cd /d "%~dp0" && python s3_flood.py && pause"
 ) else (
+    echo [INFO] Trying main version...
     python s3_flood.py
+    if %errorlevel% neq 0 (
+        echo.
+        echo [WARNING] Main version failed, trying simple compatible version...
+        echo [INFO] This often happens on older Windows systems
+        echo.
+        python s3_flood_simple.py
+    )
 )
 
 echo.
