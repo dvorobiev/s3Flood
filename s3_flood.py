@@ -11,6 +11,19 @@ def get_version() -> str:
     except FileNotFoundError:
         return "development"
 
+# Windows console compatibility fix
+import platform
+if platform.system() == "Windows":
+    import os
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    # Try to enable ANSI escape sequences on Windows
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetConsoleMode(kernel32.GetStdHandle(-11), 7)
+    except:
+        pass
+
 import os
 import sys
 import yaml
@@ -942,19 +955,63 @@ class S3FloodTester:
         if save_config:
             self.save_config()
             
+    def _fallback_menu(self, version: str) -> str:
+        """Fallback menu for Windows console compatibility"""
+        while True:
+            self.console.print(f"\n[bold blue]S3 Flood v{version} - Main Menu[/bold blue]")
+            self.console.print("1. Run Test")
+            self.console.print("2. Configure")
+            self.console.print("3. View Statistics")
+            self.console.print("4. Exit")
+            
+            try:
+                choice_num = input("\nSelect option (1-4): ").strip()
+                if choice_num == "1":
+                    return "Run Test"
+                elif choice_num == "2":
+                    return "Configure"
+                elif choice_num == "3":
+                    return "View Statistics"
+                elif choice_num == "4":
+                    return "Exit"
+                else:
+                    self.console.print("[red]Invalid choice. Please enter 1-4.[/red]")
+            except (KeyboardInterrupt, EOFError):
+                return "Exit"
+
     def main_menu(self):
         """Display main menu and handle user choices"""
         version = get_version()
+        
         while True:
-            choice = questionary.select(
-                f"S3 Flood v{version} - Main Menu:",
-                choices=[
-                    "Run Test",
-                    "Configure",
-                    "View Statistics",
-                    "Exit"
-                ]
-            ).ask()
+            # Windows console fallback mode
+            if platform.system() == "Windows":
+                try:
+                    # Try normal questionary first
+                    choice = questionary.select(
+                        f"S3 Flood v{version} - Main Menu:",
+                        choices=[
+                            "Run Test",
+                            "Configure",
+                            "View Statistics",
+                            "Exit"
+                        ]
+                    ).ask()
+                except Exception as e:
+                    # Fallback to simple input if questionary fails
+                    self.console.print(f"[yellow]Using fallback menu (questionary error: {e})[/yellow]")
+                    choice = self._fallback_menu(version)
+            else:
+                # Linux/macOS - use normal questionary
+                choice = questionary.select(
+                    f"S3 Flood v{version} - Main Menu:",
+                    choices=[
+                        "Run Test",
+                        "Configure",
+                        "View Statistics",
+                        "Exit"
+                    ]
+                ).ask()
             
             if choice == "Run Test":
                 if not self.setup_s5cmd():

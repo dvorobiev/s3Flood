@@ -19,8 +19,40 @@
 
 ## Running the Application
 
-- Double-click `run.bat`
-- Or open command prompt and execute: `python s3_flood.py`
+**Multiple ways to run S3 Flood on Windows:**
+
+1. **run.bat** - Enhanced launcher with Windows Terminal support
+2. **run.ps1** - PowerShell version (recommended for console issues)
+3. **run_simple.bat** - Fallback version for compatibility issues
+4. **Direct command:** `python s3_flood.py`
+
+## Troubleshooting Console Issues
+
+**If you see prompt_toolkit/questionary errors:**
+
+1. **Try PowerShell version:**
+   ```powershell
+   Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+   .\run.ps1
+   ```
+
+2. **Try simple launcher:**
+   ```cmd
+   run_simple.bat
+   ```
+
+3. **Use Windows Terminal (if available):**
+   - Install from Microsoft Store
+   - Run.bat will automatically detect and use it
+
+4. **Manual workaround:**
+   ```cmd
+   set PYTHONIOENCODING=utf-8
+   set TERM=dumb
+   python s3_flood.py
+   ```
+
+**The application includes automatic fallback for console compatibility issues.**
 
 ## If Problems Occur
 
