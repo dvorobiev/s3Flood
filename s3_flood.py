@@ -3,6 +3,14 @@
 S3 Flood - TUI application for S3 backend testing using s5cmd
 """
 
+def get_version() -> str:
+    """Get version from VERSION file"""
+    try:
+        with open(Path(__file__).parent / "VERSION", "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "development"
+
 import os
 import sys
 import yaml
@@ -936,9 +944,10 @@ class S3FloodTester:
             
     def main_menu(self):
         """Display main menu and handle user choices"""
+        version = get_version()
         while True:
             choice = questionary.select(
-                "S3 Flood - Main Menu:",
+                f"S3 Flood v{version} - Main Menu:",
                 choices=[
                     "Run Test",
                     "Configure",
