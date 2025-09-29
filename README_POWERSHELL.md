@@ -1,5 +1,7 @@
 # S3 Flood - PowerShell Edition / S3 Flood - PowerShell версия
 
+![Version](https://img.shields.io/badge/version-1.6.1-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20PowerShell-blue.svg) ![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
+
 English version / Русская версия
 
 A PowerShell implementation of the S3 Flood tool for testing S3-compatible storage performance with parallel upload/download operations.

@@ -1,6 +1,8 @@
 # S3 Flood - S3 Load Testing Tool
 # S3 Flood - Инструмент нагрузочного тестирования S3
 
+![Version](https://img.shields.io/badge/version-1.6.1-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20PowerShell-blue.svg) ![Python](https://img.shields.io/badge/python-3.7%2B-blue.svg)
+
 **English:** S3 Flood is a cross-platform terminal interface (TUI) application designed for stress-testing S3-compatible storage systems such as MinIO or AWS S3. It evaluates performance by generating test files and performing parallel upload, download, and delete operations.
 
 **Русский:** S3 Flood - это кроссплатформенное приложение с терминальным интерфейсом (TUI), предназначенное для стресс-тестирования S3-совместимых хранилищ, таких как MinIO или AWS S3. Оно позволяет оценить производительность, генерируя тестовые файлы и выполняя параллельные операции загрузки, скачивания и удаления.
