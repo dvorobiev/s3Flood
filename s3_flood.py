@@ -1362,6 +1362,12 @@ endpoint = {self._get_s3_url()}
         self.console.print(f"[green]✓ Uploaded {len(upload_result['uploaded'])} files "
                           f"in {upload_result['time_elapsed']:.2f}s[/green]")
         
+        # Update stats with initial upload
+        self.stats["files_uploaded"] += len(upload_result['uploaded'])
+        self.stats["total_upload_time"] += upload_result['time_elapsed']
+        if 'file_upload_info' in upload_result:
+            self.stats["upload_times"].extend(upload_result['file_upload_info'])
+        
         # Extract S3 paths and URL mapping for download operations
         s3_paths = [s3_path for _, s3_path in upload_result['uploaded']]
         file_url_mapping = {}  # Will be populated if available in upload result
