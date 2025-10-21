@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-S3 Flood - TUI application for S3 backend testing using s5cmd
+S3 Flood - TUI application for S3 backend testing using s5cmd or rclone
 """
 
 def get_version() -> str:
@@ -41,11 +41,11 @@ except ImportError as e:
     print("[INFO] Falling back to simple mode...")
     USE_SIMPLE_MODE = True
     # Create dummy classes to prevent errors
-    class Console:
+    class ConsoleFallback:
         def print(self, *args, **kwargs):
             print(*args)
     
-    class Table:
+    class TableFallback:
         def __init__(self, *args, **kwargs):
             pass
         def add_column(self, *args, **kwargs):
@@ -53,11 +53,83 @@ except ImportError as e:
         def add_row(self, *args, **kwargs):
             pass
     
-    class Panel:
+    class PanelFallback:
         def __init__(self, *args, **kwargs):
             pass
     
-    questionary = None
+    # Create aliases to use fallback classes
+    Console = ConsoleFallback
+    Table = TableFallback
+    Panel = PanelFallback
+    
+    # Create a simple fallback for questionary
+    class SimpleQuestionary:
+        @staticmethod
+        def text(message, default=None):
+            class TextQuestion:
+                def __init__(self, message, default):
+                    self.message = message
+                    self.default = default
+                
+                def ask(self):
+                    if self.default:
+                        value = input(f"{self.message} [{self.default}]: ")
+                        return value if value else self.default
+                    else:
+                        return input(f"{self.message}: ")
+            return TextQuestion(message, default)
+        
+        @staticmethod
+        def confirm(message, default=False):
+            class ConfirmQuestion:
+                def __init__(self, message, default):
+                    self.message = message
+                    self.default = default
+                
+                def ask(self):
+                    default_str = "y/n" if not self.default else ("Y/n" if self.default else "y/N")
+                    value = input(f"{self.message} ({default_str}): ")
+                    if not value:
+                        return self.default
+                    return value.lower().startswith('y')
+            return ConfirmQuestion(message, default)
+            
+        @staticmethod
+        def select(message, choices, default=None):
+            class SelectQuestion:
+                def __init__(self, message, choices, default):
+                    self.message = message
+                    self.choices = choices
+                    self.default = default
+                
+                def ask(self):
+                    print(f"{self.message}")
+                    for i, choice in enumerate(self.choices, 1):
+                        print(f"{i}. {choice}")
+                    
+                    while True:
+                        try:
+                            if self.default:
+                                default_index = self.choices.index(self.default) + 1
+                                choice_input = input(f"Select option (1-{len(self.choices)}) [{default_index}]: ")
+                                if not choice_input:
+                                    return self.default
+                                choice_num = int(choice_input)
+                            else:
+                                choice_input = input(f"Select option (1-{len(self.choices)}): ")
+                                choice_num = int(choice_input)
+                                
+                            if 1 <= choice_num <= len(self.choices):
+                                return self.choices[choice_num - 1]
+                            else:
+                                print("Invalid option, please try again.")
+                        except (ValueError, IndexError):
+                            print("Invalid input, please try again.")
+                        except KeyboardInterrupt:
+                            return None
+            return SelectQuestion(message, choices, default)
+    
+    questionary = SimpleQuestionary()
 
 import os
 import sys
@@ -93,6 +165,8 @@ class S3FloodTester:
         self.running = True
         # Use test_files_directory from config or default to "./s3_temp_files"
         self.local_temp_dir = Path("./s3_temp_files")
+        # Tool selection - default to s5cmd
+        self.tool = "s5cmd"
         
         # Register signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -209,6 +283,115 @@ class S3FloodTester:
             self.console.print(f"[red]Error checking s5cmd: {e}[/red]")
             return False
             
+    def setup_rclone(self):
+        """Setup rclone with provided credentials"""
+        try:
+            # Check if rclone is available
+            result = subprocess.run(["rclone", "--version"], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                self.console.print("[red]rclone not found. Please install rclone first.[/red]")
+                return False
+                
+            # Create rclone config section if it doesn't exist
+            self._create_rclone_config()
+                
+            # Test S3 connection with provided credentials
+            cmd = [
+                "rclone", 
+                "ls", 
+                f"s3flood:{self.config['bucket_name']}"
+            ]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            
+            if result.returncode == 0:
+                return True
+            else:
+                self.console.print(f"[red]S3 connection failed with return code {result.returncode}[/red]")
+                if result.stderr:
+                    self.console.print(f"[red]Error: {result.stderr}[/red]")
+                return False
+                
+        except FileNotFoundError:
+            self.console.print("[red]rclone not found. Please install rclone first.[/red]")
+            return False
+        except subprocess.TimeoutExpired:
+            self.console.print("[red]rclone test timed out after 60 seconds.[/red]")
+            return False
+        except Exception as e:
+            self.console.print(f"[red]Error checking rclone: {e}[/red]")
+            return False
+            
+    def _create_rclone_config(self):
+        """Create or update rclone configuration with S3 settings"""
+        try:
+            # Get rclone config file path
+            result = subprocess.run(["rclone", "config", "file"], 
+                                  capture_output=True, text=True, timeout=10)
+            if result.returncode != 0:
+                self.console.print("[red]Failed to get rclone config file path.[/red]")
+                return False
+                
+            # Extract config file path from output
+            lines = result.stdout.strip().split('\n')
+            if len(lines) < 2:
+                self.console.print("[red]Unexpected rclone config file output.[/red]")
+                return False
+                
+            config_file_path = lines[1].strip()
+            config_dir = os.path.dirname(config_file_path)
+            
+            # Create config directory if it doesn't exist
+            os.makedirs(config_dir, exist_ok=True)
+            
+            # Read existing config if it exists
+            existing_config = ""
+            if os.path.exists(config_file_path):
+                with open(config_file_path, 'r') as f:
+                    existing_config = f.read()
+            
+            # Check if s3flood section already exists
+            if "[s3flood]" in existing_config:
+                # Remove existing s3flood section
+                lines = existing_config.split('\n')
+                new_lines = []
+                skip_section = False
+                
+                for line in lines:
+                    if line.strip() == "[s3flood]":
+                        skip_section = True
+                        continue
+                    elif line.startswith('[') and line.endswith(']') and skip_section:
+                        # Start of new section, stop skipping
+                        skip_section = False
+                    
+                    if not skip_section:
+                        new_lines.append(line)
+                
+                existing_config = '\n'.join(new_lines)
+            
+            # Create rclone config content
+            rclone_config_content = f"""{existing_config}
+[s3flood]
+type = s3
+provider = Other
+access_key_id = {self.config['access_key']}
+secret_access_key = {self.config['secret_key']}
+endpoint = {self._get_s3_url()}
+"""
+            
+            # Write config to file
+            with open(config_file_path, 'w') as f:
+                f.write(rclone_config_content.strip() + '\n')
+                
+            self.console.print("[green]✓ rclone configuration updated[/green]")
+            return True
+            
+        except Exception as e:
+            self.console.print(f"[red]Error creating rclone config: {e}[/red]")
+            return False
+            
     def create_test_files(self) -> List[Path]:
         """Create test files of different sizes with progress tracking"""
         # Use directory from config
@@ -302,6 +485,13 @@ class S3FloodTester:
             self.console.print(f"[green]    ✓ {file_path.name} completed[/green]")
 
     def upload_files(self, file_list: List[Path]) -> Dict[str, Any]:
+        """Upload files to S3 using selected tool (s5cmd or rclone) in parallel with per-file progress"""
+        if self.tool == "rclone":
+            return self._upload_files_rclone(file_list)
+        else:
+            return self._upload_files_s5cmd(file_list)
+            
+    def _upload_files_s5cmd(self, file_list: List[Path]) -> Dict[str, Any]:
         """Upload files to S3 using s5cmd in parallel with per-file progress"""
         cycle_start_time = time.time()
         uploaded_files = []
@@ -441,7 +631,139 @@ class S3FloodTester:
             "file_urls": file_urls  # Return URL mapping for cross-node testing
         }
         
+    def _upload_files_rclone(self, file_list: List[Path]) -> Dict[str, Any]:
+        """Upload files to S3 using rclone in parallel with per-file progress"""
+        cycle_start_time = time.time()
+        uploaded_files = []
+        failed_files = []
+        
+        # Update rclone config before upload
+        self._create_rclone_config()
+        
+        # Track total bytes for successful uploads only
+        total_bytes_uploaded = 0
+        file_upload_info = []  # Track individual file upload info (size, time)
+        
+        # Show operation start
+        self.console.print(f"[cyan]Uploading {len(file_list)} files using rclone with {self.config['parallel_threads']} parallel threads[/cyan]")
+        
+        # Track file statuses
+        file_statuses = {}  # Track status of each file
+        start_times = {}    # Track start times for each file
+        
+        # Process in batches based on parallel_threads setting
+        batch_size = self.config["parallel_threads"]
+        for i in range(0, len(file_list), batch_size):
+            if not self.running:  # Check if user requested to stop
+                break
+                
+            batch = file_list[i:i+batch_size]
+            
+            # Start parallel upload processes
+            processes = []
+            for file_path in batch:
+                # Create rclone command for upload
+                s3_path = f"s3flood:{self.config['bucket_name']}/{file_path.name}"
+                
+                # Record start time for this file
+                start_times[str(file_path)] = time.time()
+                file_statuses[str(file_path)] = "started"
+                
+                # Show file start
+                file_size_mb = file_path.stat().st_size // (1024 * 1024) if file_path.exists() else 0
+                self.console.print(f"[blue]→[/blue] Uploading {file_path.name} ({file_size_mb}MB)")
+                
+                cmd = [
+                    "rclone", 
+                    "copy", str(file_path), s3_path,
+                    "--transfers", "1"  # One transfer per process
+                ]
+                
+                try:
+                    # Start process without blocking
+                    process = subprocess.Popen(
+                        cmd, 
+                        stdout=subprocess.PIPE, 
+                        stderr=subprocess.PIPE
+                    )
+                    processes.append((process, file_path, s3_path))
+                except Exception as e:
+                    failed_files.append((file_path, str(e)))
+                    self.console.print(f"[red]✗[/red] {file_path.name} failed to start: {e}")
+            
+            # Poll processes with non-blocking approach
+            completed_processes = []
+            poll_count = 0
+            max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+            
+            while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
+                poll_count += 1
+                for item in processes:
+                    if item in completed_processes:
+                        continue
+                        
+                    process, file_path, s3_path = item
+                    
+                    # Check if process has completed (non-blocking)
+                    if process.poll() is not None:
+                        # Process completed
+                        stdout, stderr = process.communicate()
+                        file_size = file_path.stat().st_size if file_path.exists() else 0
+                        file_upload_time = time.time() - start_times[str(file_path)]
+                        
+                        if process.returncode == 0:
+                            uploaded_files.append((file_path, s3_path))
+                            # Track bytes for successful uploads
+                            total_bytes_uploaded += file_size
+                            # Track individual file upload info
+                            file_upload_info.append((file_size, file_upload_time))
+                            file_statuses[str(file_path)] = "completed"
+                            
+                            # Calculate speed
+                            speed_mbps = (file_size / (1024 * 1024)) / file_upload_time if file_upload_time > 0 else 0
+                            file_size_mb = file_size // (1024 * 1024)
+                            self.console.print(f"[green]✓[/green] {file_path.name} uploaded successfully ({file_size_mb}MB in {file_upload_time:.1f}s, {speed_mbps:.1f}MB/s)")
+                        else:
+                            failed_files.append((file_path, stderr.decode() if stderr else "Unknown error"))
+                            file_statuses[str(file_path)] = "failed"
+                            self.console.print(f"[red]✗[/red] {file_path.name} failed to upload")
+                        
+                        completed_processes.append(item)
+                
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)
+            
+            # Check if we hit the polling limit
+            if poll_count >= max_polls:
+                for item in processes:
+                    if item not in completed_processes:
+                        process, file_path, s3_path = item
+                        process.kill()  # Kill the process
+                        failed_files.append((file_path, "Timeout - process killed"))
+                        self.console.print(f"[red]✗[/red] {file_path.name} timed out and was killed")
+        
+        cycle_elapsed_time = time.time() - cycle_start_time
+        
+        # Update stats
+        self.stats["files_uploaded"] += len(uploaded_files)
+        self.stats["total_upload_time"] += cycle_elapsed_time
+        self.stats["total_bytes_uploaded"] += total_bytes_uploaded
+        self.stats["upload_times"].extend(file_upload_info)
+        
+        return {
+            "uploaded": uploaded_files,
+            "failed": failed_files,
+            "time_elapsed": cycle_elapsed_time
+        }
+        
     def download_files(self, s3_file_paths: List[str], upload_file_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Download files from S3 using selected tool (s5cmd or rclone) in parallel with per-file progress"""
+        if self.tool == "rclone":
+            return self._download_files_rclone(s3_file_paths)
+        else:
+            return self._download_files_s5cmd(s3_file_paths, upload_file_urls)
+            
+    def _download_files_s5cmd(self, s3_file_paths: List[str], upload_file_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Download files from S3 using s5cmd in parallel with per-file progress.
         
         If upload_file_urls is provided, will use different endpoints for read operations
@@ -585,8 +907,136 @@ class S3FloodTester:
             "failed": failed_files,
             "time_elapsed": cycle_elapsed_time
         }
+        
+    def _download_files_rclone(self, s3_file_paths: List[str]) -> Dict[str, Any]:
+        """Download files from S3 using rclone in parallel with per-file progress"""
+        cycle_start_time = time.time()
+        downloaded_files = []
+        failed_files = []
+        
+        # Update rclone config before download
+        self._create_rclone_config()
+        
+        # Show operation start
+        self.console.print(f"[cyan]Reading {len(s3_file_paths)} files using rclone with {self.config['parallel_threads']} parallel threads[/cyan]")
+        
+        # Track file statuses
+        file_statuses = {}  # Track status of each file
+        start_times = {}    # Track start times for each file
+        
+        # Process in batches
+        batch_size = self.config["parallel_threads"]
+        for i in range(0, len(s3_file_paths), batch_size):
+            if not self.running:  # Check if user requested to stop
+                break
+                
+            batch = s3_file_paths[i:i+batch_size]
+            
+            # Start parallel read processes
+            processes = []
+            for s3_path in batch:
+                file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
+                
+                # Create rclone command for reading
+                full_s3_path = f"s3flood:{self.config['bucket_name']}/{file_name}"
+                
+                # Record start time for this file
+                start_times[full_s3_path] = time.time()
+                file_statuses[full_s3_path] = "started"
+                
+                # Show file start
+                self.console.print(f"[blue]→[/blue] Reading {file_name}")
+                
+                # Use cat command to read file content (simulates download without storing)
+                cmd = [
+                    "rclone",
+                    "cat", full_s3_path
+                ]
+                
+                try:
+                    # Start process without blocking
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,  # Discard output
+                        stderr=subprocess.PIPE
+                    )
+                    processes.append((process, full_s3_path, file_name))
+                except Exception as e:
+                    failed_files.append((full_s3_path, str(e)))
+                    self.console.print(f"[red]✗[/red] {file_name} failed to start: {e}")
+            
+            # Poll processes with non-blocking approach
+            completed_processes = []
+            poll_count = 0
+            max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+            
+            while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
+                poll_count += 1
+                for item in processes:
+                    if item in completed_processes:
+                        continue
+                        
+                    process, full_s3_path, file_name = item
+                    
+                    # Check if process has completed (non-blocking)
+                    if process.poll() is not None:
+                        # Process completed
+                        stdout, stderr = process.communicate()
+                        file_download_time = time.time() - start_times[full_s3_path]
+                        
+                        # For read operations, we consider it successful if the process completes
+                        if process.returncode == 0:
+                            downloaded_files.append(full_s3_path)
+                            file_statuses[full_s3_path] = "completed"
+                            self.console.print(f"[green]✓[/green] {file_name} read successfully ({file_download_time:.1f}s)")
+                        else:
+                            # Only consider it a failure if there's an actual error
+                            error_output = stderr.decode().strip() if stderr else ""
+                            if error_output and "object not found" not in error_output.lower():
+                                failed_files.append((full_s3_path, error_output))
+                                file_statuses[full_s3_path] = "failed"
+                                self.console.print(f"[red]✗[/red] {file_name} failed to read")
+                            else:
+                                # If it's just a "object not found" error or no error, still count as downloaded
+                                downloaded_files.append(full_s3_path)
+                                file_statuses[full_s3_path] = "completed"
+                                self.console.print(f"[green]✓[/green] {file_name} read successfully ({file_download_time:.1f}s)")
+                        
+                        completed_processes.append(item)
+                
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)
+            
+            # Check if we hit the polling limit
+            if poll_count >= max_polls:
+                for item in processes:
+                    if item not in completed_processes:
+                        process, full_s3_path, file_name = item
+                        process.kill()  # Kill the process
+                        failed_files.append((full_s3_path, "Timeout - process killed"))
+                        self.console.print(f"[red]✗[/red] {file_name} timed out and was killed")
+        
+        cycle_elapsed_time = time.time() - cycle_start_time
+        
+        # Update stats
+        self.stats["files_downloaded"] += len(downloaded_files)
+        self.stats["total_download_time"] += cycle_elapsed_time
+        # Note: We don't track bytes downloaded as we're just reading to /dev/null
+        
+        return {
+            "downloaded": downloaded_files,
+            "failed": failed_files,
+            "time_elapsed": cycle_elapsed_time
+        }
 
     def delete_files(self, s3_file_paths: List[str], upload_file_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """Delete files from S3 using selected tool (s5cmd or rclone) in parallel with per-file progress"""
+        if self.tool == "rclone":
+            return self._delete_files_rclone(s3_file_paths)
+        else:
+            return self._delete_files_s5cmd(s3_file_paths, upload_file_urls)
+            
+    def _delete_files_s5cmd(self, s3_file_paths: List[str], upload_file_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Delete files from S3 using s5cmd in parallel with per-file progress.
         
         If upload_file_urls is provided, will use different endpoints for delete operations
@@ -720,6 +1170,116 @@ class S3FloodTester:
             "time_elapsed": cycle_elapsed_time
         }
         
+    def _delete_files_rclone(self, s3_file_paths: List[str]) -> Dict[str, Any]:
+        """Delete files from S3 using rclone in parallel with per-file progress"""
+        cycle_start_time = time.time()
+        deleted_files = []
+        failed_files = []
+        
+        # Update rclone config before delete
+        self._create_rclone_config()
+        
+        # Show operation start
+        self.console.print(f"[cyan]Deleting {len(s3_file_paths)} files using rclone with {self.config['parallel_threads']} parallel threads[/cyan]")
+        
+        # Track file statuses
+        file_statuses = {}  # Track status of each file
+        start_times = {}    # Track start times for each file
+        
+        # Process in batches
+        batch_size = self.config["parallel_threads"]
+        for i in range(0, len(s3_file_paths), batch_size):
+            if not self.running:  # Check if user requested to stop
+                break
+                
+            batch = s3_file_paths[i:i+batch_size]
+            
+            # Start parallel delete processes
+            processes = []
+            for s3_path in batch:
+                file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
+                
+                # Create rclone command for delete
+                full_s3_path = f"s3flood:{self.config['bucket_name']}/{file_name}"
+                
+                # Record start time for this file
+                start_times[full_s3_path] = time.time()
+                file_statuses[full_s3_path] = "started"
+                
+                # Show file start
+                self.console.print(f"[blue]→[/blue] Deleting {file_name}")
+                
+                cmd = [
+                    "rclone",
+                    "deletefile", full_s3_path
+                ]
+                
+                try:
+                    # Start process without blocking
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE
+                    )
+                    processes.append((process, full_s3_path, file_name))
+                except Exception as e:
+                    failed_files.append((full_s3_path, str(e)))
+                    self.console.print(f"[red]✗[/red] {file_name} failed to start: {e}")
+            
+            # Poll processes with non-blocking approach
+            completed_processes = []
+            poll_count = 0
+            max_polls = 1200  # Limit polling to avoid infinite loop (1200 * 0.1s = 120 seconds)
+            
+            while len(completed_processes) < len(processes) and self.running and poll_count < max_polls:
+                poll_count += 1
+                for item in processes:
+                    if item in completed_processes:
+                        continue
+                        
+                    process, full_s3_path, file_name = item
+                    
+                    # Check if process has completed (non-blocking)
+                    if process.poll() is not None:
+                        # Process completed
+                        stdout, stderr = process.communicate()
+                        file_delete_time = time.time() - start_times[full_s3_path]
+                        
+                        if process.returncode == 0:
+                            deleted_files.append(full_s3_path)
+                            file_statuses[full_s3_path] = "completed"
+                            self.console.print(f"[green]✓[/green] {file_name} deleted successfully ({file_delete_time:.1f}s)")
+                        else:
+                            failed_files.append((full_s3_path, stderr.decode() if stderr else "Unknown error"))
+                            file_statuses[full_s3_path] = "failed"
+                            self.console.print(f"[red]✗[/red] {file_name} failed to delete")
+                        
+                        completed_processes.append(item)
+                
+                # Small delay to prevent busy waiting
+                time.sleep(0.1)
+            
+            # Check if we hit the polling limit
+            if poll_count >= max_polls:
+                for item in processes:
+                    if item not in completed_processes:
+                        process, full_s3_path, file_name = item
+                        process.kill()  # Kill the process
+                        failed_files.append((full_s3_path, "Timeout - process killed"))
+                        self.console.print(f"[red]✗[/red] {file_name} timed out and was killed")
+        
+        cycle_elapsed_time = time.time() - cycle_start_time
+        
+        # Update stats
+        self.stats["files_deleted"] += len(deleted_files)
+        self.stats["total_delete_time"] += cycle_elapsed_time
+        
+        return {
+            "deleted": deleted_files,
+            "failed": failed_files,
+            "time_elapsed": cycle_elapsed_time
+        }
+        
     def display_stats(self):
         """Display statistics in a formatted table"""
         table = Table(title="S3 Flood Test Statistics")
@@ -730,6 +1290,7 @@ class S3FloodTester:
         table.add_row("Files Uploaded", str(self.stats["files_uploaded"]))
         table.add_row("Files Downloaded", str(self.stats["files_downloaded"]))
         table.add_row("Files Deleted", str(self.stats["files_deleted"]))
+        table.add_row("Tool Used", self.tool)
         
         # Add speed calculations in MB/s
         if self.stats["files_uploaded"] > 0:
@@ -753,7 +1314,7 @@ class S3FloodTester:
 
     def run_test_cycle(self):
         """Run a single test cycle with randomized concurrent read/write operations"""
-        self.console.print(Panel("[bold blue]Starting S3 Flood Test Cycle[/bold blue]"))
+        self.console.print(Panel(f"[bold blue]Starting S3 Flood Test Cycle (using {self.tool})[/bold blue]"))
         
         # Create test files (only in first cycle or if not in infinite loop mode)
         self.console.print("[cyan]Creating test files...[/cyan]")
@@ -879,7 +1440,7 @@ class S3FloodTester:
         
     def run_infinite_loop(self):
         """Run test cycles in an infinite loop"""
-        self.console.print("[bold magenta]Starting infinite test loop...[/bold magenta]")
+        self.console.print(f"[bold magenta]Starting infinite test loop using {self.tool}...[/bold magenta]")
         self.console.print("[yellow]Press Ctrl+C to stop[/yellow]")
         
         while self.running:
@@ -913,74 +1474,161 @@ class S3FloodTester:
         if urls_input:
             self.config["s3_urls"] = [url.strip() for url in urls_input.split(",")]
             
-        self.config["access_key"] = questionary.text(
+        access_key_input = questionary.text(
             "Access Key:",
             default=self.config.get("access_key", "minioadmin")
         ).ask()
+        if access_key_input is not None:
+            self.config["access_key"] = access_key_input
         
-        self.config["secret_key"] = questionary.text(
+        secret_key_input = questionary.text(
             "Secret Key:",
             default=self.config.get("secret_key", "minioadmin")
         ).ask()
+        if secret_key_input is not None:
+            self.config["secret_key"] = secret_key_input
         
-        self.config["bucket_name"] = questionary.text(
+        bucket_name_input = questionary.text(
             "Bucket Name:",
             default=self.config.get("bucket_name", "test-bucket")
         ).ask()
+        if bucket_name_input is not None:
+            self.config["bucket_name"] = bucket_name_input
         
-        self.config["cluster_mode"] = questionary.confirm(
+        cluster_mode_input = questionary.confirm(
             "Cluster Mode?",
             default=self.config.get("cluster_mode", False)
         ).ask()
+        if cluster_mode_input is not None:
+            self.config["cluster_mode"] = cluster_mode_input
         
         # Performance Configuration
-        self.config["parallel_threads"] = int(questionary.text(
+        parallel_threads_input = questionary.text(
             "Parallel Threads:",
             default=str(self.config.get("parallel_threads", 5))
-        ).ask())
+        ).ask()
+        if parallel_threads_input is not None:
+            try:
+                self.config["parallel_threads"] = int(parallel_threads_input)
+            except ValueError:
+                self.console.print("[yellow]Invalid input for parallel threads, using default value.[/yellow]")
+                self.config["parallel_threads"] = 5
         
         # File Configuration
         self.console.print("[cyan]File Group Configuration:[/cyan]")
         
-        small_count = int(questionary.text(
+        small_count_input = questionary.text(
             "Small files count (up to 100MB each):",
             default=str(self.config["file_groups"]["small"]["count"])
-        ).ask())
+        ).ask()
+        if small_count_input is not None:
+            try:
+                small_count = int(small_count_input)
+                self.config["file_groups"]["small"]["count"] = small_count
+            except ValueError:
+                self.console.print("[yellow]Invalid input for small files count, using default value.[/yellow]")
         
-        medium_count = int(questionary.text(
+        medium_count_input = questionary.text(
             "Medium files count (up to 5GB each):",
             default=str(self.config["file_groups"]["medium"]["count"])
-        ).ask())
+        ).ask()
+        if medium_count_input is not None:
+            try:
+                medium_count = int(medium_count_input)
+                self.config["file_groups"]["medium"]["count"] = medium_count
+            except ValueError:
+                self.console.print("[yellow]Invalid input for medium files count, using default value.[/yellow]")
         
-        large_count = int(questionary.text(
+        large_count_input = questionary.text(
             "Large files count (up to 20GB each):",
             default=str(self.config["file_groups"]["large"]["count"])
-        ).ask())
-        
-        self.config["file_groups"]["small"]["count"] = small_count
-        self.config["file_groups"]["medium"]["count"] = medium_count
-        self.config["file_groups"]["large"]["count"] = large_count
+        ).ask()
+        if large_count_input is not None:
+            try:
+                large_count = int(large_count_input)
+                self.config["file_groups"]["large"]["count"] = large_count
+            except ValueError:
+                self.console.print("[yellow]Invalid input for large files count, using default value.[/yellow]")
         
         # Test Configuration
-        self.config["infinite_loop"] = questionary.confirm(
+        infinite_loop_input = questionary.confirm(
             "Run in infinite loop?",
             default=self.config.get("infinite_loop", True)
         ).ask()
+        if infinite_loop_input is not None:
+            self.config["infinite_loop"] = infinite_loop_input
         
         if self.config["infinite_loop"]:
-            self.config["cycle_delay_seconds"] = int(questionary.text(
+            cycle_delay_input = questionary.text(
                 "Delay between cycles (seconds):",
                 default=str(self.config.get("cycle_delay_seconds", 15))
-            ).ask())
+            ).ask()
+            if cycle_delay_input is not None:
+                try:
+                    self.config["cycle_delay_seconds"] = int(cycle_delay_input)
+                except ValueError:
+                    self.console.print("[yellow]Invalid input for cycle delay, using default value.[/yellow]")
+                    self.config["cycle_delay_seconds"] = 15
             
         # Save configuration
-        save_config = questionary.confirm(
+        save_config_input = questionary.confirm(
             "Save configuration to config.yaml?",
             default=True
         ).ask()
         
-        if save_config:
+        if save_config_input:
             self.save_config()
+            
+    def select_tool(self):
+        """Select tool to use for operations (s5cmd or rclone)"""
+        self.console.print(Panel("[bold blue]Select Tool[/bold blue]"))
+        
+        # Check if tools are available
+        s5cmd_available = self._check_tool_available("s5cmd")
+        rclone_available = self._check_tool_available("rclone")
+        
+        if not s5cmd_available and not rclone_available:
+            self.console.print("[red]Neither s5cmd nor rclone is available. Please install at least one tool.[/red]")
+            return False
+            
+        choices = []
+        if s5cmd_available:
+            choices.append("s5cmd")
+        if rclone_available:
+            choices.append("rclone")
+            
+        if len(choices) == 1:
+            self.tool = choices[0]
+            self.console.print(f"[green]Using {self.tool} (only available tool)[/green]")
+            return True
+            
+        # Ask user to select tool
+        selected_tool = questionary.select(
+            "Select tool to use:",
+            choices=choices,
+            default=self.tool
+        ).ask()
+        
+        if selected_tool:
+            self.tool = selected_tool
+            self.console.print(f"[green]Selected tool: {self.tool}[/green]")
+            
+            # Setup the selected tool
+            if self.tool == "s5cmd":
+                return self.setup_s5cmd()
+            else:
+                return self.setup_rclone()
+        else:
+            return False
+            
+    def _check_tool_available(self, tool_name: str) -> bool:
+        """Check if a tool is available in the system"""
+        try:
+            result = subprocess.run([tool_name, "--help"], 
+                                  capture_output=True, text=True, timeout=5)
+            return result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return False
             
     def _fallback_menu(self, version: str) -> str:
         """Fallback menu for Windows console compatibility"""
@@ -989,10 +1637,11 @@ class S3FloodTester:
             self.console.print("1. Run Test")
             self.console.print("2. Configure")
             self.console.print("3. View Statistics")
-            self.console.print("4. Exit")
+            self.console.print("4. Select Tool")
+            self.console.print("5. Exit")
             
             try:
-                choice_num = input("\nSelect option (1-4): ").strip()
+                choice_num = input("\nSelect option (1-5): ").strip()
                 if choice_num == "1":
                     return "Run Test"
                 elif choice_num == "2":
@@ -1000,76 +1649,77 @@ class S3FloodTester:
                 elif choice_num == "3":
                     return "View Statistics"
                 elif choice_num == "4":
+                    return "Select Tool"
+                elif choice_num == "5":
                     return "Exit"
-                else:
-                    self.console.print("[red]Invalid choice. Please enter 1-4.[/red]")
-            except (KeyboardInterrupt, EOFError):
+            except KeyboardInterrupt:
                 return "Exit"
-
+            except Exception:
+                self.console.print("[red]Invalid input, please try again.[/red]")
+                
     def main_menu(self):
-        """Display main menu and handle user choices"""
+        """Main menu for the application"""
         version = get_version()
         
-        while True:
-            # Windows console fallback mode
-            if platform.system() == "Windows":
-                try:
-                    # Try normal questionary first
-                    choice = questionary.select(
-                        f"S3 Flood v{version} - Main Menu:",
-                        choices=[
-                            "Run Test",
-                            "Configure",
-                            "View Statistics",
-                            "Exit"
-                        ]
-                    ).ask()
-                except Exception as e:
-                    # Fallback to simple input if questionary fails
-                    self.console.print(f"[yellow]Using fallback menu (questionary error: {e})[/yellow]")
-                    choice = self._fallback_menu(version)
-            else:
-                # Linux/macOS - use normal questionary
+        # If we're in simple mode, use the fallback menu
+        if USE_SIMPLE_MODE:
+            choice = self._fallback_menu(version)
+        else:
+            # Rich menu
+            while True:
+                self.console.print(Panel(f"[bold blue]S3 Flood v{version} - Main Menu[/bold blue]"))
+                
                 choice = questionary.select(
-                    f"S3 Flood v{version} - Main Menu:",
+                    "Select an option:",
                     choices=[
                         "Run Test",
                         "Configure",
                         "View Statistics",
+                        "Select Tool",  # Add tool selection option
                         "Exit"
                     ]
                 ).ask()
-            
-            if choice == "Run Test":
-                if not self.setup_s5cmd():
-                    continue
+                
+                if not choice:
+                    choice = "Exit"
+                break  # Exit the while loop after getting choice
                     
-                if self.config.get("infinite_loop", True):
+        # Handle the choice
+        if choice == "Run Test":
+            # Select tool before running test
+            if self.select_tool():
+                if self.config["infinite_loop"]:
                     self.run_infinite_loop()
                 else:
                     self.run_test_cycle()
-                    
-            elif choice == "Configure":
-                self.interactive_config()
-                
-            elif choice == "View Statistics":
-                self.display_stats()
-                
-            elif choice == "Exit":
-                self.console.print("[bold green]Goodbye![/bold green]")
-                break
-
+        elif choice == "Configure":
+            self.interactive_config()
+        elif choice == "View Statistics":
+            self.display_stats()
+        elif choice == "Select Tool":
+            self.select_tool()
+        elif choice == "Exit":
+            self.console.print("[bold yellow]Goodbye![/bold yellow]")
+            return
+            
+        # After handling the choice, show the menu again (unless we're exiting)
+        if choice != "Exit":
+            self.main_menu()
 
 def main():
+    """Main entry point"""
     tester = S3FloodTester()
     tester.load_config()
     
-    # Check if running in interactive mode or with command line args
-    if len(sys.argv) > 1 and sys.argv[1] == "--config":
-        tester.interactive_config()
-    else:
+    try:
         tester.main_menu()
-
+    except KeyboardInterrupt:
+        tester.console.print("\n[bold yellow]Interrupted by user[/bold yellow]")
+    except Exception as e:
+        tester.console.print(f"\n[bold red]Error: {e}[/bold red]")
+        if not USE_SIMPLE_MODE:
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main()
