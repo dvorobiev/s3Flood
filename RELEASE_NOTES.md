@@ -1,5 +1,30 @@
 # S3 Flood Release Notes
 
+## v1.7.0 - Algorithm Selection and Enhanced Testing Modes
+
+### 🚀 Major Features: Algorithm Selection and New Testing Modes
+
+#### ✅ Algorithm Selection
+- **Pre-tool Selection**: Choose algorithm before selecting tool (s5cmd/rclone)
+- **Multiple Test Scenarios**: Select from different testing workflows
+- **Enhanced User Experience**: More intuitive workflow with clear algorithm options
+
+#### ✅ New Testing Modes
+- **Write-Read-Delete Algorithm**: Traditional workflow (default)
+- **Infinite Write Mode**: Continuous write operations without deletion
+- **File Reuse Optimization**: Work with existing test files in loop mode
+
+#### ✅ Enhanced Loop Functionality
+- **Persistent File Mode**: Reuse test files across cycles without regeneration
+- **Performance Improvements**: Faster cycle execution with file reuse
+- **Resource Optimization**: Reduced I/O overhead with file caching
+
+#### 🎯 User Benefits
+- **Flexible Testing**: Choose the most appropriate algorithm for your use case
+- **Efficient Resource Usage**: Reduced file generation overhead in loop mode
+- **Enhanced Performance Monitoring**: Better insights with multiple algorithm options
+- **Improved Workflow**: More intuitive and customizable testing experience
+
 ## v1.6.3 - Rclone Support and Codebase Improvements
 
 ### 🚀 Major Feature: Rclone Support

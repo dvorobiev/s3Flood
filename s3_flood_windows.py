@@ -45,6 +45,8 @@ class S3FloodWindows:
         }
         self.running = True
         self.local_temp_dir = Path("./s3_temp_files")
+        # Algorithm selection - default to traditional
+        self.algorithm = "traditional"
         
         # Register signal handler
         try:
@@ -273,6 +275,34 @@ class S3FloodWindows:
             self.safe_print(f"[ERROR] s5cmd {operation} failed: {e}")
             return False
             
+    def select_algorithm(self):
+        """Select algorithm to use for operations"""
+        self.safe_print("")
+        self.safe_print("Select Algorithm:")
+        self.safe_print("1. Traditional (Write-Read-Delete)")
+        self.safe_print("   Upload files -> Read files -> Delete files")
+        self.safe_print("2. Infinite Write (Write only, no deletion)")
+        self.safe_print("   Continuously upload files without deletion")
+        self.safe_print("")
+        
+        while True:
+            try:
+                choice = input("Enter your choice (1 or 2): ").strip()
+                if choice == "1":
+                    self.algorithm = "traditional"
+                    self.safe_print("Selected: Traditional (Write-Read-Delete)")
+                    return True
+                elif choice == "2":
+                    self.algorithm = "infinite_write"
+                    self.safe_print("Selected: Infinite Write (Write only, no deletion)")
+                    return True
+                else:
+                    self.safe_print("Invalid choice. Please enter 1 or 2.")
+            except KeyboardInterrupt:
+                return False
+            except Exception:
+                self.safe_print("Invalid input, please try again.")
+                
     def run_test_cycle(self):
         """Run complete test cycle with original logic"""
         self.safe_print("")
@@ -427,8 +457,14 @@ class S3FloodWindows:
         
         self.safe_print(f"Cycles completed: {self.stats['cycles_completed']}")
         self.safe_print(f"Files uploaded: {self.stats['files_uploaded']}")
-        self.safe_print(f"Files downloaded: {self.stats['files_downloaded']}")
-        self.safe_print(f"Files deleted: {self.stats['files_deleted']}")
+        
+        if self.algorithm == "infinite_write":
+            self.safe_print("Algorithm: Infinite Write (Write only)")
+        else:
+            self.safe_print(f"Files downloaded: {self.stats['files_downloaded']}")
+            self.safe_print(f"Files deleted: {self.stats['files_deleted']}")
+            self.safe_print("Algorithm: Traditional (Write-Read-Delete)")
+            
         self.safe_print(f"Total upload time: {self.stats['total_upload_time']:.2f} sec")
         self.safe_print(f"Total download time: {self.stats['total_download_time']:.2f} sec")
         self.safe_print(f"Total delete time: {self.stats['total_delete_time']:.2f} sec")
@@ -475,24 +511,134 @@ class S3FloodWindows:
             
     def run_infinite_loop(self):
         """Run infinite test loop"""
-        self.safe_print("Starting infinite test loop...")
-        self.safe_print("Press Ctrl+C to stop")
-        
-        try:
-            while self.running:
-                self.run_test_cycle()
+        if self.algorithm == "infinite_write":
+            self.safe_print("Starting infinite write loop...")
+            self.safe_print("Press Ctrl+C to stop")
+            self.run_infinite_write_cycle()
+        else:
+            self.safe_print("Starting infinite test loop...")
+            self.safe_print("Press Ctrl+C to stop")
+            
+            try:
+                while self.running:
+                    self.run_test_cycle()
+                    
+                    if not self.running:
+                        break
+                        
+                    delay = self.config.get("cycle_delay_seconds", 15)
+                    self.safe_print(f"\n[INFO] Waiting {delay} seconds until next cycle...")
+                    time.sleep(delay)
+                    
+            except KeyboardInterrupt:
+                self.safe_print("\n[INFO] Stopped by Ctrl+C...")
+                self.running = False
                 
+    def run_infinite_write_cycle(self):
+        """Run infinite write cycle without deletion"""
+        self.safe_print("")
+        self.safe_print("=" * 50)
+        self.safe_print("Starting Infinite Write Test Cycle")
+        self.safe_print("=" * 50)
+        
+        # Step 1: Create test files
+        test_files = self.create_test_files()
+        if not test_files:
+            self.safe_print("[ERROR] Failed to create test files")
+            return
+        
+        # Step 2: Upload ALL files
+        self.safe_print(f"\n[INFO] Uploading ALL {len(test_files)} files to S3...")
+        upload_start = time.time()
+        uploaded_files = []
+        
+        for file_path in test_files:
+            if not self.running:
+                break
+                
+            s3_path = f"s3://{self.config['bucket_name']}/{file_path.name}"
+            self.safe_print(f"Uploading {file_path.name}...")
+            
+            if self.run_s5cmd_command("upload", str(file_path), s3_path):
+                uploaded_files.append(s3_path)
+                self.stats["files_uploaded"] += 1
+                self.stats["total_bytes_uploaded"] += file_path.stat().st_size
+            else:
+                self.safe_print(f"[ERROR] Failed to upload {file_path.name}")
+                
+        upload_time = time.time() - upload_start
+        self.stats["total_upload_time"] += upload_time
+        self.safe_print(f"[SUCCESS] Uploaded {len(uploaded_files)} files in {upload_time:.2f} seconds")
+        
+        # Step 3: Continuous write operations
+        self.safe_print(f"\n[INFO] Starting continuous write operations...")
+        cycle_count = 0
+        
+        while self.running:
+            cycle_count += 1
+            self.safe_print(f"\nWrite cycle #{cycle_count}")
+            
+            # Re-upload all files
+            write_start = time.time()
+            write_success = 0
+            
+            for s3_path in uploaded_files:
                 if not self.running:
                     break
-                    
-                delay = self.config.get("cycle_delay_seconds", 15)
-                self.safe_print(f"\\n[INFO] Waiting {delay} seconds until next cycle...")
-                time.sleep(delay)
                 
-        except KeyboardInterrupt:
-            self.safe_print("\\n[INFO] Stopped by Ctrl+C...")
-            self.running = False
+                file_name = s3_path.split('/')[-1]
+                temp_file = self.local_temp_dir / f"rewrite_{file_name}"
+                
+                # Create temp file with new content
+                try:
+                    with open(temp_file, 'wb') as f:
+                        f.write(f"Re-write test data {datetime.now()}".encode())
+                except Exception as e:
+                    self.safe_print(f"[ERROR] Failed to create temp file: {e}")
+                    continue
+                
+                self.safe_print(f"Re-writing {file_name}...")
+                if self.run_s5cmd_command("upload", str(temp_file), s3_path):
+                    write_success += 1
+                    self.stats["files_uploaded"] += 1
+                else:
+                    self.safe_print(f"[ERROR] Failed to re-write {file_name}")
+                
+                # Clean up
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
             
+            write_time = time.time() - write_start
+            self.stats["total_upload_time"] += write_time
+            self.safe_print(f"[SUCCESS] Re-wrote {write_success} files in {write_time:.2f} seconds")
+            
+            # Update cycle count
+            self.stats["cycles_completed"] += 1
+            
+            # Show current stats
+            self.show_statistics()
+            
+            # Check if we should continue
+            if not self.running:
+                break
+                
+            # Small delay between cycles
+            if self.running:
+                self.safe_print(f"\n[INFO] Waiting 5 seconds before next write cycle...")
+                time.sleep(5)
+        
+        # Clean up local files at the end
+        if self.local_temp_dir.exists():
+            shutil.rmtree(self.local_temp_dir)
+            self.safe_print("[INFO] Cleaned up temporary files")
+            
+        self.safe_print("")
+        self.safe_print("=" * 50)
+        self.safe_print("Infinite Write Test Stopped!")
+        self.safe_print("=" * 50)
+        
     def main_menu(self):
         """Main menu"""
         while True:
@@ -503,42 +649,50 @@ class S3FloodWindows:
             self.safe_print("3. Run Quick Test")
             self.safe_print("4. Run Infinite Loop")
             self.safe_print("5. Show Statistics")
-            self.safe_print("6. Exit")
+            self.safe_print("6. Select Algorithm")
+            self.safe_print("7. Exit")
             self.safe_print("")
             
             try:
-                choice = input("Select option (1-6): ").strip()
+                choice = input("Select option (1-7): ").strip()
                 
                 if choice == "1":
-                    self.safe_print("\\nTesting S3 connection...")
+                    self.safe_print("\nTesting S3 connection...")
                     self.test_s5cmd()
-                    input("\\nPress Enter to continue...")
+                    input("\nPress Enter to continue...")
                     
                 elif choice == "2":
                     self.interactive_config()
                     
                 elif choice == "3":
-                    self.safe_print("\\n[INFO] Running single test cycle...")
-                    self.run_test_cycle()
-                    input("\\nPress Enter to continue...")
+                    # Select algorithm before running test
+                    if self.select_algorithm():
+                        self.safe_print("\n[INFO] Running single test cycle...")
+                        self.run_test_cycle()
+                    input("\nPress Enter to continue...")
                     
                 elif choice == "4":
-                    self.run_infinite_loop()
+                    # Select algorithm before running infinite loop
+                    if self.select_algorithm():
+                        self.run_infinite_loop()
                     
                 elif choice == "5":
                     self.show_statistics()
-                    input("\\nPress Enter to continue...")
+                    input("\nPress Enter to continue...")
                     
                 elif choice == "6":
-                    self.safe_print("\\nGoodbye!")
+                    self.select_algorithm()
+                    
+                elif choice == "7":
+                    self.safe_print("\nGoodbye!")
                     break
                     
                 else:
-                    self.safe_print("\\n[ERROR] Invalid choice. Please enter 1-6.")
+                    self.safe_print("\n[ERROR] Invalid choice. Please enter 1-7.")
                     input("Press Enter to continue...")
                     
             except (KeyboardInterrupt, EOFError):
-                self.safe_print("\\n\\nExiting...")
+                self.safe_print("\n\nExiting...")
                 break
                 
 def main():

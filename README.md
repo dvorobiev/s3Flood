@@ -78,6 +78,10 @@ s3Flood/
 - **Infinite Loop Mode**: Ability to run continuous stress testing
 - **Cluster Mode**: Test multiple S3 endpoints simultaneously
 - **Tool Selection**: Choose between s5cmd and rclone for S3 operations
+- **Algorithm Selection**: Choose between different testing algorithms:
+  - *Traditional (Write-Read-Delete)*: Upload files → Read files → Delete files
+  - *Infinite Write*: Continuously upload files without deletion
+- **File Reuse Optimization**: Reuse existing test files in loop mode for better performance
 
 **Русский:**
 - **Интерактивный TUI**: Простая настройка и мониторинг в реальном времени
@@ -89,6 +93,10 @@ s3Flood/
 - **Режим бесконечного цикла**: Возможность непрерывного стресс-тестирования
 - **Режим кластера**: Тестирование нескольких S3 endpoint'ов одновременно
 - **Выбор инструмента**: Выбор между s5cmd и rclone для S3-операций
+- **Выбор алгоритма**: Выбор между различными алгоритмами тестирования:
+  - *Традиционный (Запись-Чтение-Удаление)*: Загрузка файлов → Чтение файлов → Удаление файлов
+  - *Бесконечная запись*: Непрерывная загрузка файлов без удаления
+- **Оптимизация повторного использования файлов**: Повторное использование существующих тестовых файлов в режиме цикла для лучшей производительности
 
 ## Requirements / Требования
 
@@ -517,7 +525,7 @@ This will launch an interactive setup wizard where you can specify:
 **Русский:**
 Перед запуском приложения настройте его с вашими параметрами S3:
 
-```bash
+``bash
 source venv/bin/activate
 python s3_flood.py --config
 ```

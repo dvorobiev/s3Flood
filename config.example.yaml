@@ -27,3 +27,8 @@ cycle_delay_seconds: 15         # Delay between test cycles (in seconds)
 
 # Test files location
 test_files_directory: "./s3_temp_files"  # Directory for temporary test files
+
+# Algorithm selection (not directly configurable in file, selected at runtime)
+# Available algorithms:
+# - traditional: Write-Read-Delete (default)
+# - infinite_write: Continuous write operations without deletion

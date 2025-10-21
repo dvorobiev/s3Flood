@@ -167,6 +167,8 @@ class S3FloodTester:
         self.local_temp_dir = Path("./s3_temp_files")
         # Tool selection - default to s5cmd
         self.tool = "s5cmd"
+        # Algorithm selection - default to traditional
+        self.algorithm = "traditional"
         
         # Register signal handler for graceful shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -392,8 +394,28 @@ endpoint = {self._get_s3_url()}
             self.console.print(f"[red]Error creating rclone config: {e}[/red]")
             return False
             
+    def check_existing_test_files(self) -> List[Path]:
+        """Check for existing test files in the temp directory"""
+        if not self.local_temp_dir.exists():
+            return []
+            
+        # Get all files in the directory
+        file_list = list(self.local_temp_dir.glob("*"))
+        
+        # Filter out directories and return only files
+        file_list = [f for f in file_list if f.is_file()]
+        
+        return file_list
+    
     def create_test_files(self) -> List[Path]:
         """Create test files of different sizes with progress tracking"""
+        # Check if we should reuse existing files
+        if self.config.get("infinite_loop", False) and self.algorithm == "traditional":
+            existing_files = self.check_existing_test_files()
+            if existing_files:
+                self.console.print(f"[yellow]Reusing {len(existing_files)} existing test files...[/yellow]")
+                return existing_files
+        
         # Use directory from config
         if self.local_temp_dir.exists():
             shutil.rmtree(self.local_temp_dir)
@@ -628,7 +650,8 @@ endpoint = {self._get_s3_url()}
             "uploaded": uploaded_files,
             "failed": failed_files,
             "time_elapsed": cycle_elapsed_time,
-            "file_urls": file_urls  # Return URL mapping for cross-node testing
+            "file_urls": file_urls,  # Return URL mapping for cross-node testing
+            "file_upload_info": file_upload_info  # Return individual file upload info for statistics
         }
         
     def _upload_files_rclone(self, file_list: List[Path]) -> Dict[str, Any]:
@@ -1288,8 +1311,14 @@ endpoint = {self._get_s3_url()}
         
         table.add_row("Cycles Completed", str(self.stats["cycles_completed"]))
         table.add_row("Files Uploaded", str(self.stats["files_uploaded"]))
-        table.add_row("Files Downloaded", str(self.stats["files_downloaded"]))
-        table.add_row("Files Deleted", str(self.stats["files_deleted"]))
+        
+        if self.algorithm == "infinite_write":
+            table.add_row("Algorithm", "Infinite Write (Write only)")
+        else:
+            table.add_row("Files Downloaded", str(self.stats["files_downloaded"]))
+            table.add_row("Files Deleted", str(self.stats["files_deleted"]))
+            table.add_row("Algorithm", "Traditional (Write-Read-Delete)")
+            
         table.add_row("Tool Used", self.tool)
         
         # Add speed calculations in MB/s
@@ -1312,6 +1341,98 @@ endpoint = {self._get_s3_url()}
             
         self.console.print(table)
 
+    def run_infinite_write_cycle(self):
+        """Run infinite write cycle without deletion"""
+        self.console.print(Panel(f"[bold blue]Starting Infinite Write Test Cycle (using {self.tool})[/bold blue]"))
+        
+        # Create test files (only in first cycle or if not in infinite loop mode)
+        self.console.print("[cyan]Creating test files...[/cyan]")
+        file_list = self.create_test_files()
+        self.console.print(f"[green]✓ Created {len(file_list)} test files[/green]")
+        
+        # Show file distribution
+        small_files = [f for f in file_list if f.name.startswith("small")]
+        medium_files = [f for f in file_list if f.name.startswith("medium")]
+        large_files = [f for f in file_list if f.name.startswith("large")]
+        self.console.print(f"[dim]  └─ Small: {len(small_files)}, Medium: {len(medium_files)}, Large: {len(large_files)}[/dim]")
+        
+        # Upload all files first
+        self.console.print("[cyan]Uploading files to S3...[/cyan]")
+        upload_result = self.upload_files(file_list)
+        self.console.print(f"[green]✓ Uploaded {len(upload_result['uploaded'])} files "
+                          f"in {upload_result['time_elapsed']:.2f}s[/green]")
+        
+        # Extract S3 paths and URL mapping for download operations
+        s3_paths = [s3_path for _, s3_path in upload_result['uploaded']]
+        file_url_mapping = {}  # Will be populated if available in upload result
+        
+        # Check if upload result contains URL mapping
+        if 'file_urls' in upload_result:
+            # Create mapping from s3_path to URL
+            for file_path, s3_path in upload_result['uploaded']:
+                file_key = str(file_path)
+                if file_key in upload_result['file_urls']:
+                    file_url_mapping[s3_path] = upload_result['file_urls'][file_key]
+        
+        # For infinite write, we'll continuously upload files without deleting them
+        self.console.print("[cyan]Starting continuous write operations...[/cyan]")
+        
+        # Process files in batches, continuously uploading them
+        batch_size = self.config["parallel_threads"]
+        cycle_count = 0
+        
+        while self.running:
+            cycle_count += 1
+            self.console.print(f"[dim]Write cycle #{cycle_count}[/dim]")
+            
+            # Process files in batches
+            for i in range(0, len(s3_paths), batch_size):
+                if not self.running:
+                    break
+                    
+                batch_files = s3_paths[i:i+batch_size]
+                
+                # Perform write operations (re-upload same files)
+                self.console.print(f"[cyan]Re-writing {len(batch_files)} files...[/cyan]")
+                write_result = self._reupload_files(batch_files, file_url_mapping)
+                self.console.print(f"[green]✓ Re-wrote {len(write_result['uploaded'])} files "
+                                  f"in {write_result['time_elapsed']:.2f}s[/green]")
+                
+                # Update stats
+                self.stats["files_uploaded"] += len(write_result['uploaded'])
+                self.stats["total_upload_time"] += write_result['time_elapsed']
+                
+                # Add individual upload times for better speed calculation
+                if 'file_upload_info' in write_result:
+                    self.stats["upload_times"].extend(write_result['file_upload_info'])
+                
+                # Small delay between batches
+                if self.running and i + batch_size < len(s3_paths):
+                    time.sleep(1)
+            
+            # Update cycle count
+            self.stats["cycles_completed"] += 1
+            
+            # Show current stats
+            self.display_stats()
+            
+            # Check if we should continue
+            if not self.running:
+                break
+                
+            # Small delay between cycles
+            if self.running:
+                self.console.print("[blue]Waiting 5 seconds before next write cycle...[/blue]")
+                time.sleep(5)
+        
+        # Clean up local files at the end
+        if self.local_temp_dir.exists():
+            shutil.rmtree(self.local_temp_dir)
+            self.console.print("[dim]✓ Cleaned up temporary files[/dim]")
+            
+        self.console.print(Panel("[bold green]Infinite Write Test Stopped![/bold green]"))
+        self.display_stats()
+        
     def run_test_cycle(self):
         """Run a single test cycle with randomized concurrent read/write operations"""
         self.console.print(Panel(f"[bold blue]Starting S3 Flood Test Cycle (using {self.tool})[/bold blue]"))
@@ -1429,6 +1550,16 @@ endpoint = {self._get_s3_url()}
         # Upload temporary files with same S3 paths (overwriting)
         upload_result = self.upload_files(temp_files)
         
+        # Add file upload info for statistics
+        file_upload_info = []
+        for temp_file in temp_files:
+            if temp_file.exists():
+                file_size = temp_file.stat().st_size
+                # We don't have individual upload times from upload_files, so we'll approximate
+                file_upload_info.append((file_size, upload_result['time_elapsed'] / len(temp_files) if len(temp_files) > 0 else 0))
+        
+        upload_result['file_upload_info'] = file_upload_info
+        
         # Clean up temporary files
         for temp_file in temp_files:
             try:
@@ -1440,26 +1571,31 @@ endpoint = {self._get_s3_url()}
         
     def run_infinite_loop(self):
         """Run test cycles in an infinite loop"""
-        self.console.print(f"[bold magenta]Starting infinite test loop using {self.tool}...[/bold magenta]")
-        self.console.print("[yellow]Press Ctrl+C to stop[/yellow]")
-        
-        while self.running:
-            try:
-                self.run_test_cycle()
-                
-                if self.running and self.config["infinite_loop"]:
-                    delay = self.config["cycle_delay_seconds"]
-                    self.console.print(f"[blue]Waiting {delay} seconds before next cycle...[/blue]")
-                    time.sleep(delay)
-            except Exception as e:
-                self.console.print(f"[red]Error in test cycle: {e}[/red]")
-                if self.config["infinite_loop"]:
-                    time.sleep(5)  # Wait before retrying
-                else:
-                    break
+        if self.algorithm == "infinite_write":
+            self.console.print(f"[bold magenta]Starting infinite write loop using {self.tool}...[/bold magenta]")
+            self.console.print("[yellow]Press Ctrl+C to stop[/yellow]")
+            self.run_infinite_write_cycle()
+        else:
+            self.console.print(f"[bold magenta]Starting infinite test loop using {self.tool}...[/bold magenta]")
+            self.console.print("[yellow]Press Ctrl+C to stop[/yellow]")
+            
+            while self.running:
+                try:
+                    self.run_test_cycle()
                     
-        self.console.print("[bold yellow]S3 Flood test stopped[/bold yellow]")
-        self.display_stats()
+                    if self.running and self.config["infinite_loop"]:
+                        delay = self.config["cycle_delay_seconds"]
+                        self.console.print(f"[blue]Waiting {delay} seconds before next cycle...[/blue]")
+                        time.sleep(delay)
+                except Exception as e:
+                    self.console.print(f"[red]Error in test cycle: {e}[/red]")
+                    if self.config["infinite_loop"]:
+                        time.sleep(5)  # Wait before retrying
+                    else:
+                        break
+                        
+            self.console.print("[bold yellow]S3 Flood test stopped[/bold yellow]")
+            self.display_stats()
         
     def interactive_config(self):
         """Interactive configuration setup"""
@@ -1656,6 +1792,36 @@ endpoint = {self._get_s3_url()}
                 return "Exit"
             except Exception:
                 self.console.print("[red]Invalid input, please try again.[/red]")
+    def select_algorithm(self):
+        """Select algorithm to use for operations"""
+        self.console.print(Panel("[bold blue]Select Algorithm[/bold blue]"))
+        self.console.print("[cyan]1. Traditional (Write-Read-Delete)[/cyan]")
+        self.console.print("   Upload files → Read files → Delete files")
+        self.console.print("[cyan]2. Infinite Write (Write only, no deletion)[/cyan]")
+        self.console.print("   Continuously upload files without deletion")
+        
+        # Algorithm choices
+        algorithms = [
+            "Traditional (Write-Read-Delete)",
+            "Infinite Write (Write only, no deletion)"
+        ]
+        
+        selected_algorithm = questionary.select(
+            "Select algorithm to use:",
+            choices=algorithms,
+            default=algorithms[0]
+        ).ask()
+        
+        if selected_algorithm:
+            if "Traditional" in selected_algorithm:
+                self.algorithm = "traditional"
+                self.console.print("[green]Selected algorithm: Traditional (Write-Read-Delete)[/green]")
+            elif "Infinite Write" in selected_algorithm:
+                self.algorithm = "infinite_write"
+                self.console.print("[green]Selected algorithm: Infinite Write (Write only, no deletion)[/green]")
+            return True
+        else:
+            return False
                 
     def main_menu(self):
         """Main menu for the application"""
@@ -1686,12 +1852,14 @@ endpoint = {self._get_s3_url()}
                     
         # Handle the choice
         if choice == "Run Test":
-            # Select tool before running test
-            if self.select_tool():
-                if self.config["infinite_loop"]:
-                    self.run_infinite_loop()
-                else:
-                    self.run_test_cycle()
+            # Select algorithm before selecting tool
+            if self.select_algorithm():
+                # Select tool before running test
+                if self.select_tool():
+                    if self.config["infinite_loop"]:
+                        self.run_infinite_loop()
+                    else:
+                        self.run_test_cycle()
         elif choice == "Configure":
             self.interactive_config()
         elif choice == "View Statistics":

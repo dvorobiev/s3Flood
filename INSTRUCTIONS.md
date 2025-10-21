@@ -154,6 +154,10 @@ test_files_directory: "./s3_temp_files"  # Directory for temporary test files
 
 ### Advanced Features
 - **Tool Selection**: Choose between s5cmd and rclone at startup
+- **Algorithm Selection**: Choose between different testing algorithms:
+  - *Traditional (Write-Read-Delete)*: Upload files → Read files → Delete files
+  - *Infinite Write*: Continuously upload files without deletion
+- **File Reuse Optimization**: Reuse existing test files in loop mode for better performance
 - **Automatic Configuration**: Automatic rclone configuration from app settings
 - **Cross-Platform Support**: Works on Linux, Windows, macOS
 - **Bilingual Interface**: English and Russian language support
@@ -176,6 +180,15 @@ When you select rclone, the application automatically:
 3. Performs all operations through rclone commands
 
 ## Release Notes
+
+### v1.7.0 - Algorithm Selection and Enhanced Testing Modes
+- **Algorithm Selection**: Choose algorithm before selecting tool (s5cmd/rclone)
+- **Multiple Test Scenarios**: Select from different testing workflows
+- **New Algorithms**: 
+  - *Traditional (Write-Read-Delete)*: Upload files → Read files → Delete files
+  - *Infinite Write*: Continuously upload files without deletion
+- **File Reuse Optimization**: Work with existing test files in loop mode
+- **Enhanced User Experience**: More intuitive workflow with clear algorithm options
 
 ### v1.6.3 - Rclone Support and Codebase Improvements
 - Added rclone as alternative tool for S3 operations
