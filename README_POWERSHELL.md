@@ -1,6 +1,6 @@
 # S3 Flood - PowerShell Edition / S3 Flood - PowerShell версия
 
-![Version](https://img.shields.io/badge/version-1.6.1-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20PowerShell-blue.svg) ![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
+![Version](https://img.shields.io/badge/version-1.6.3-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20PowerShell-blue.svg) ![PowerShell](https://img.shields.io/badge/powershell-5.1%2B-blue.svg)
 
 English version / Русская версия
 
@@ -197,46 +197,3 @@ The script provides real-time feedback:
 - File counts
 - Operation status
 - Timing information
-
-**Русский:**
-Скрипт предоставляет обратную связь в реальном времени:
-- Прогресс пакетов
-- Количество файлов
-- Статус операций
-- Информация о времени
-
-## 🔧 Troubleshooting / Устранение неполадок
-
-**English:**
-### "fsutil is not recognized"
-Run PowerShell as Administrator
-
-### "rclone not found"
-Ensure `rclone.exe` is in the same directory as the script
-
-### "Access denied"
-Check S3 bucket permissions and rclone configuration
-
-### "Out of disk space"
-The script requires significant disk space for temporary files (up to several hundred GB)
-
-**Русский:**
-### "fsutil is not recognized"
-Запустите PowerShell от имени администратора
-
-### "rclone not found"
-Убедитесь, что `rclone.exe` находится в той же директории, что и скрипт
-
-### "Access denied"
-Проверьте права доступа к S3 бакету и настройки rclone
-
-### "Out of disk space"
-Скрипт требует значительного места на диске для временных файлов (до нескольких сотен ГБ)
-
-## 📄 License / Лицензия
-
-**English:**
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-**Русский:**
-Этот проект лицензирован по лицензии MIT - смотрите файл [LICENSE](LICENSE) для подробностей.

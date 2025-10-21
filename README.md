@@ -1,11 +1,56 @@
 # S3 Flood - S3 Load Testing Tool
 # S3 Flood - Инструмент нагрузочного тестирования S3
 
-![Version](https://img.shields.io/badge/version-1.6.1-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20PowerShell-blue.svg) ![Python](https://img.shields.io/badge/python-3.7%2B-blue.svg)
+![Version](https://img.shields.io/badge/version-1.6.3-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20PowerShell-blue.svg) ![Python](https://img.shields.io/badge/python-3.7%2B-blue.svg)
 
 **English:** S3 Flood is a cross-platform terminal interface (TUI) application designed for stress-testing S3-compatible storage systems such as MinIO or AWS S3. It evaluates performance by generating test files and performing parallel upload, download, and delete operations.
 
 **Русский:** S3 Flood - это кроссплатформенное приложение с терминальным интерфейсом (TUI), предназначенное для стресс-тестирования S3-совместимых хранилищ, таких как MinIO или AWS S3. Оно позволяет оценить производительность, генерируя тестовые файлы и выполняя параллельные операции загрузки, скачивания и удаления.
+
+## Documentation / Документация
+
+**English:**
+- [INSTRUCTIONS.md](file:///Users/dvorobiev/s3Flood/INSTRUCTIONS.md) - Complete user guide with installation, configuration, and usage instructions
+- [README_POWERSHELL.md](file:///Users/dvorobiev/s3Flood/README_POWERSHELL.md) - PowerShell-specific documentation
+- [docs/](file:///Users/dvorobiev/s3Flood/docs/) - Additional documentation files
+
+**Русский:**
+- [INSTRUCTIONS.md](file:///Users/dvorobiev/s3Flood/INSTRUCTIONS.md) - Полное руководство пользователя с инструкциями по установке, настройке и использованию
+- [README_POWERSHELL.md](file:///Users/dvorobiev/s3Flood/README_POWERSHELL.md) - Документация по PowerShell-версии
+- [docs/](file:///Users/dvorobiev/s3Flood/docs/) - Дополнительные файлы документации
+
+## Project Structure / Структура проекта
+
+```
+s3Flood/
+├── s3_flood.py                 # Main Python application
+├── s3_flood_windows.py         # Windows-specific implementation
+├── s3_flood_powershell.ps1     # PowerShell implementation
+├── config.example.yaml         # Example configuration file
+├── INSTRUCTIONS.md             # Complete user guide
+├── README.md                   # Main documentation (English/Russian)
+├── README_POWERSHELL.md        # PowerShell documentation (English/Russian)
+├── RELEASE_NOTES.md            # Release notes and changelog
+├── VERSION                     # Current version number
+├── requirements.txt            # Python dependencies
+├── install.sh                  # Linux/macOS installation script
+├── install.bat                 # Windows installation script
+├── install_powershell.ps1      # PowerShell installation script
+├── run.sh                      # Linux/macOS run script
+├── run_windows.bat             # Windows run script
+├── start_minio.sh              # MinIO startup script
+├── .gitignore                  # Git ignore file
+├── docs/                       # Additional documentation
+│   ├── GITHUB_INSTRUCTIONS.md  # GitHub-specific instructions
+│   ├── WINDOWS_FILES_GUIDE.md  # Windows files guide
+│   └── WINDOWS_INSTALL.md      # Windows installation guide
+├── tests/                      # Demo and test scripts
+│   ├── debug_s3.py             # S3 debugging utility
+│   ├── demo_clean.py           # Cleanup demo
+│   ├── demo_progress.py        # Progress demo
+│   └── final_demo.py           # Final demo
+└── .git/                       # Git repository
+```
 
 ## Supported Platforms / Поддерживаемые платформы
 
@@ -26,30 +71,34 @@
 **English:**
 - **Interactive TUI**: Easy setup and real-time monitoring
 - **Customizable File Generation**: Creation of test files of various sizes (small, medium, large)
-- **Parallel Operations**: Concurrent execution of S3 operations using s5cmd
+- **Parallel Operations**: Concurrent execution of S3 operations using s5cmd or rclone
 - **File Progress Tracking**: Individual progress indicators for each operation
 - **Randomized Load**: Random parallel read/write operations
 - **Statistics Collection**: Performance metrics including throughput and operation times
 - **Infinite Loop Mode**: Ability to run continuous stress testing
+- **Cluster Mode**: Test multiple S3 endpoints simultaneously
+- **Tool Selection**: Choose between s5cmd and rclone for S3 operations
 
 **Русский:**
 - **Интерактивный TUI**: Простая настройка и мониторинг в реальном времени
 - **Настраиваемая генерация файлов**: Создание тестовых файлов разных размеров (маленькие, средние, большие)
-- **Параллельные операции**: Выполнение S3-операций параллельно с использованием s5cmd
+- **Параллельные операции**: Выполнение S3-операций параллельно с использованием s5cmd или rclone
 - **Отслеживание прогресса по файлам**: Индивидуальные индикаторы прогресса для каждой операции
 - **Рандомизированная нагрузка**: Случайные параллельные операции чтения/записи
 - **Сбор статистики**: Метрики производительности, включая пропускную способность и время операций
 - **Режим бесконечного цикла**: Возможность непрерывного стресс-тестирования
+- **Режим кластера**: Тестирование нескольких S3 endpoint'ов одновременно
+- **Выбор инструмента**: Выбор между s5cmd и rclone для S3-операций
 
 ## Requirements / Требования
 
 **English:**
 - Python 3.7+
-- Installed s5cmd and available in PATH
+- Installed s5cmd and/or rclone and available in PATH
 
 **Русский:**
 - Python 3.7+
-- Установленный s5cmd и доступный в PATH
+- Установленный s5cmd и/или rclone и доступный в PATH
 
 ## Installation / Установка
 
@@ -92,6 +141,10 @@
    mkdir tools
    # Download s5cmd from https://github.com/peak/s5cmd/releases
    # Extract s5cmd.exe to the tools/ folder
+   
+   # Optional: Download rclone for Windows
+   # Download rclone from https://rclone.org/downloads/
+   # Extract rclone.exe to the tools/ folder
    ```
 
 **Русский:**
@@ -113,6 +166,10 @@
    mkdir tools
    # Скачайте s5cmd с https://github.com/peak/s5cmd/releases
    # Распакуйте s5cmd.exe в папку tools/
+   
+   # Опционально: Скачивание rclone для Windows
+   # Скачайте rclone с https://rclone.org/downloads/
+   # Распакуйте rclone.exe в папку tools/
    ```
 
 ### Universal Installation / Универсальная установка
@@ -131,6 +188,9 @@ This script will perform:
    tar -xzf s5cmd.tar.gz
    sudo install s5cmd /usr/local/bin/
    rm s5cmd.tar.gz
+
+   # Optional: Install rclone
+   curl https://rclone.org/install.sh | sudo bash
 
    # Create virtual environment
    python3 -m venv venv
@@ -154,6 +214,9 @@ This script will perform:
    tar -xzf s5cmd.tar.gz
    sudo install s5cmd /usr/local/bin/
    rm s5cmd.tar.gz
+
+   # Опционально: Установка rclone
+   curl https://rclone.org/install.sh | sudo bash
 
    # Создание виртуального окружения
    python3 -m venv venv
@@ -237,28 +300,263 @@ python s3_flood.py
 For the PowerShell version, parameters are configured in the script itself.
 
 **Русский:**
+```
+# S3 Flood - S3 Load Testing Tool
+# S3 Flood - Инструмент нагрузочного тестирования S3
+
+![Version](https://img.shields.io/badge/version-1.6.3-blue.svg) ![License](https://img.shields.io/badge/license-MIT-green.svg) ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS%20%7C%20PowerShell-blue.svg) ![Python](https://img.shields.io/badge/python-3.7%2B-blue.svg)
+
+**English:** S3 Flood is a cross-platform terminal interface (TUI) application designed for stress-testing S3-compatible storage systems such as MinIO or AWS S3. It evaluates performance by generating test files and performing parallel upload, download, and delete operations.
+
+**Русский:** S3 Flood - это кроссплатформенное приложение с терминальным интерфейсом (TUI), предназначенное для стресс-тестирования S3-совместимых хранилищ, таких как MinIO или AWS S3. Оно позволяет оценить производительность, генерируя тестовые файлы и выполняя параллельные операции загрузки, скачивания и удаления.
+
+## Documentation / Документация
+
+**English:**
+- [INSTRUCTIONS.md](file:///Users/dvorobiev/s3Flood/INSTRUCTIONS.md) - Complete user guide with installation, configuration, and usage instructions
+- [README_POWERSHELL.md](file:///Users/dvorobiev/s3Flood/README_POWERSHELL.md) - PowerShell-specific documentation
+- [docs/GITHUB_INSTRUCTIONS.md](file:///Users/dvorobiev/s3Flood/docs/GITHUB_INSTRUCTIONS.md) - GitHub-specific instructions
+
+**Русский:**
+- [INSTRUCTIONS.md](file:///Users/dvorobiev/s3Flood/INSTRUCTIONS.md) - Полное руководство пользователя с инструкциями по установке, настройке и использованию
+- [README_POWERSHELL.md](file:///Users/dvorobiev/s3Flood/README_POWERSHELL.md) - Документация по PowerShell-версии
+- [docs/GITHUB_INSTRUCTIONS.md](file:///Users/dvorobiev/s3Flood/docs/GITHUB_INSTRUCTIONS.md) - Инструкции по работе с GitHub
+
+## Supported Platforms / Поддерживаемые платформы
+
+**English:**
+- **Linux** (primary platform)
+- **Windows** (supported since version 1.0.0)
+- **macOS** (basic functionality support)
+- **PowerShell** (alternative version for Windows)
+
+**Русский:**
+- **Linux** (основная платформа)
+- **Windows** (поддержка с версии 1.0.0)
+- **macOS** (поддержка базовой функциональности)
+- **PowerShell** (альтернативная версия для Windows)
+
+## Features / Возможности
+
+**English:**
+- **Interactive TUI**: Easy setup and real-time monitoring
+- **Customizable File Generation**: Creation of test files of various sizes (small, medium, large)
+- **Parallel Operations**: Concurrent execution of S3 operations using s5cmd or rclone
+- **File Progress Tracking**: Individual progress indicators for each operation
+- **Randomized Load**: Random parallel read/write operations
+- **Statistics Collection**: Performance metrics including throughput and operation times
+- **Infinite Loop Mode**: Ability to run continuous stress testing
+- **Cluster Mode**: Test multiple S3 endpoints simultaneously
+- **Tool Selection**: Choose between s5cmd and rclone for S3 operations
+
+**Русский:**
+- **Интерактивный TUI**: Простая настройка и мониторинг в реальном времени
+- **Настраиваемая генерация файлов**: Создание тестовых файлов разных размеров (маленькие, средние, большие)
+- **Параллельные операции**: Выполнение S3-операций параллельно с использованием s5cmd или rclone
+- **Отслеживание прогресса по файлам**: Индивидуальные индикаторы прогресса для каждой операции
+- **Рандомизированная нагрузка**: Случайные параллельные операции чтения/записи
+- **Сбор статистики**: Метрики производительности, включая пропускную способность и время операций
+- **Режим бесконечного цикла**: Возможность непрерывного стресс-тестирования
+- **Режим кластера**: Тестирование нескольких S3 endpoint'ов одновременно
+- **Выбор инструмента**: Выбор между s5cmd и rclone для S3-операций
+
+## Requirements / Требования
+
+**English:**
+- Python 3.7+
+- Installed s5cmd and/or rclone and available in PATH
+
+**Русский:**
+- Python 3.7+
+- Установленный s5cmd и/или rclone и доступный в PATH
+
+## Installation / Установка
+
+### Linux/macOS
+
+**English:**
+1. Clone or download this repository
+
+2. Run the installation script:
+   ```bash
+   ./install.sh
+   ```
+
+**Русский:**
+1. Клонируйте или скачайте этот репозиторий
+
+2. Запустите скрипт установки:
+   ```bash
+   ./install.sh
+   ```
+
+### Windows
+
+**English:**
+1. **Windows Requirements:**
+   - Python 3.7+ (download from [python.org](https://www.python.org/downloads/))
+   - When installing Python, be sure to check "Add Python to PATH"
+
+2. **Automatic Installation:**
+   - Download the project from GitHub
+   - Run `install.bat` as administrator
+   - The script will automatically install all dependencies
+
+3. **Manual Windows Installation:**
+   ```cmd
+   # Install Python dependencies
+   pip install -r requirements.txt
+   
+   # Download s5cmd for Windows
+   mkdir tools
+   # Download s5cmd from https://github.com/peak/s5cmd/releases
+   # Extract s5cmd.exe to the tools/ folder
+   
+   # Optional: Download rclone for Windows
+   # Download rclone from https://rclone.org/downloads/
+   # Extract rclone.exe to the tools/ folder
+   ```
+
+**Русский:**
+1. **Требования для Windows:**
+   - Python 3.7+ (скачать с [python.org](https://www.python.org/downloads/))
+   - При установке Python обязательно отметьте "Add Python to PATH"
+
+2. **Автоматическая установка:**
+   - Скачайте проект с GitHub
+   - Запустите `install.bat` от имени администратора
+   - Скрипт автоматически установит все зависимости
+
+3. **Ручная установка для Windows:**
+   ```cmd
+   # Установка Python зависимостей
+   pip install -r requirements.txt
+   
+   # Скачивание s5cmd для Windows
+   mkdir tools
+   # Скачайте s5cmd с https://github.com/peak/s5cmd/releases
+   # Распакуйте s5cmd.exe в папку tools/
+   
+   # Опционально: Скачивание rclone для Windows
+   # Скачайте rclone с https://rclone.org/downloads/
+   # Распакуйте rclone.exe в папку tools/
+   ```
+
+### Universal Installation / Универсальная установка
+
+**English:**
+This script will perform:
+- Python 3 and pip3 check
+- s5cmd installation
+- Python virtual environment creation
+- Installation of Python dependencies from requirements.txt
+
+3. Alternatively, you can install dependencies manually:
+   ```bash
+   # Install s5cmd
+   wget -O s5cmd.tar.gz https://github.com/peak/s5cmd/releases/latest/download/s5cmd_$(uname -s)_$(uname -m).tar.gz
+   tar -xzf s5cmd.tar.gz
+   sudo install s5cmd /usr/local/bin/
+   rm s5cmd.tar.gz
+
+   # Optional: Install rclone
+   curl https://rclone.org/install.sh | sudo bash
+
+   # Create virtual environment
+   python3 -m venv venv
+   source venv/bin/activate
+
+   # Install Python dependencies
+   pip install -r requirements.txt
+   ```
+
+**Русский:**
+Этот скрипт выполнит:
+- Проверку Python 3 и pip3
+- Установку s5cmd
+- Создание виртуального окружения Python
+- Установку зависимостей Python из requirements.txt
+
+3. Альтернативно, вы можете установить зависимости вручную:
+   ```bash
+   # Установка s5cmd
+   wget -O s5cmd.tar.gz https://github.com/peak/s5cmd/releases/latest/download/s5cmd_$(uname -s)_$(uname -m).tar.gz
+   tar -xzf s5cmd.tar.gz
+   sudo install s5cmd /usr/local/bin/
+   rm s5cmd.tar.gz
+
+   # Опционально: Установка rclone
+   curl https://rclone.org/install.sh | sudo bash
+
+   # Создание виртуального окружения
+   python3 -m venv venv
+   source venv/bin/activate
+
+   # Установка зависимостей Python
+   pip install -r requirements.txt
+   ```
+
+## Configuration / Настройка
+
+**English:**
+Before running the application, configure it with your S3 parameters:
+
+```bash
+source venv/bin/activate
+python s3_flood.py --config
+```
+
+This will launch an interactive setup wizard where you can specify:
+- S3 endpoint URLs
+- Access key and secret key
+- Bucket name
+- Number of parallel threads
+- File group sizes and counts
+- Infinite loop settings
+
+**Русский:**
+Перед запуском приложения настройте его с вашими параметрами S3:
+
+```bash
+source venv/bin/activate
+python s3_flood.py --config
+```
+
+Это запустит интерактивный мастер настройки, где вы сможете задать:
+- URL endpoint'ов S3
+- Ключ доступа и секретный ключ
+- Имя бакета
+- Количество параллельных потоков
+- Размеры и количество файлов в группах
+- Настройки бесконечного цикла
+
+## Usage / Использование
+
+### Running the Application / Запуск приложения
+
+**English:**
 **Linux/macOS:**
 ```bash
 ./run.sh
 ```
 
-Или напрямую:
+Or directly:
 ```bash
 source venv/bin/activate
 python s3_flood.py
 ```
 
-**Windows (Python версия):**
+**Windows (Python version):**
 ```cmd
 run.bat
 ```
 
-Или напрямую:
+Or directly:
 ```cmd
 python s3_flood.py
 ```
 
-**Windows (PowerShell версия):**
+**Windows (PowerShell version):**
 ```powershell
 .\s3_flood_powershell.ps1
 ```
@@ -320,7 +618,7 @@ cycle_delay_seconds: 15         # Delay between cycles (in seconds)
 **Русский:**
 Приложение использует YAML-файл конфигурации ([config.yaml](file:///Users/dvorobiev/s3Flood/config.yaml)) со следующими параметрами:
 
-```yaml
+```
 s3_urls:
   - http://localhost:9000        # URL endpoint'ов S3
 access_key: minioadmin          # Ключ доступа
@@ -370,7 +668,7 @@ python demo/final_demo.py       # Run demo
 ```
 
 **Русский:**
-```bash
+```
 source venv/bin/activate
 python test_s3_connection.py    # Тест подключения к S3
 python demo/final_demo.py       # Запуск демо
