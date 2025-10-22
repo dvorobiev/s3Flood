@@ -1,0 +1,21 @@
+s3_urls:
+  - http://192.168.20.35:9080
+  - http://192.168.20.38:9080
+access_key: fMIwNE-6kamj3s9LSADxhfJL
+secret_key: TSDFYQYucGxDEC0F5c4x_1QtlzLBsCkzkubA_WF_
+bucket_name: cluster_test
+cluster_mode: true
+parallel_threads: 10
+file_groups:
+  small:
+    max_size_mb: 100
+    count: 0
+  medium:
+    max_size_mb: 1024
+    count: 0
+  large:
+    max_size_mb: 16000
+    count: 16
+infinite_loop: true
+cycle_delay_seconds: 30
+test_files_directory: ./s3_temp_files
