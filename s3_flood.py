@@ -1533,6 +1533,24 @@ endpoint = {self._get_s3_url()}
         self.console.print(Panel("[bold green]Test Cycle Completed![/bold green]"))
         self.display_stats()
         
+    def _get_file_size_from_name(self, file_name: str) -> int:
+        """Extract file size in bytes from filename"""
+        # Filenames are in format: {type}_{index}_{size}MB.dat
+        # Example: large_1_1905MB.dat
+        try:
+            # Split by underscore and get the size part
+            parts = file_name.split('_')
+            if len(parts) >= 3:
+                size_part = parts[-1]  # Get last part (sizeMB.dat)
+                if 'MB.dat' in size_part:
+                    size_mb = int(size_part.replace('MB.dat', ''))
+                    return size_mb * 1024 * 1024  # Convert to bytes
+        except (ValueError, IndexError):
+            pass
+        
+        # Default to 1MB if we can't parse the size
+        return 1024 * 1024
+
     def _reupload_files(self, s3_paths: List[str], upload_file_urls: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """Simulate re-writing files by downloading and re-uploading them"""
         # In a real implementation, we would:
@@ -1547,9 +1565,11 @@ endpoint = {self._get_s3_url()}
             file_name = s3_path.split('/')[-1] if '/' in s3_path else s3_path
             temp_file = self.local_temp_dir / f"temp_{file_name}"
             
-            # Create a small temporary file (in real implementation, we would download the actual file)
-            with open(temp_file, 'wb') as f:
-                f.write(b"Re-upload test data for " + file_name.encode()[:50])  # Small test data
+            # Determine file size from filename
+            file_size_bytes = self._get_file_size_from_name(file_name)
+            
+            # Create a temporary file with the same size as the original file
+            self._create_random_file(temp_file, file_size_bytes)
                 
             temp_files.append(temp_file)
         
