@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "s3flood"
+version = "0.0.1"
+description = "Lightweight CLI for S3 throughput/load testing (Linux/Windows)"
+authors = [{name="dvorobiev"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pydantic>=2.7",
+  "rich>=13.7",
+  "pyyaml>=6.0",
+]
+
+[tool.ruff]
+line-length = 100
+select = ["E","F","I","UP","B"]
+
+[tool.black]
+line-length = 100
+
