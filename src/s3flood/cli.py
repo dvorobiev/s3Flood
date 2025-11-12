@@ -26,6 +26,7 @@ def main():
     runp.add_argument("--infinite", action="store_true")
     runp.add_argument("--report", default="report.json")
     runp.add_argument("--metrics", default="metrics.csv")
+    runp.add_argument("--data-dir", default="./data", help="Path to dataset root (will scan recursively)")
 
     args = parser.parse_args()
 

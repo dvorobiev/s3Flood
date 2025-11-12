@@ -1,6 +1,5 @@
 import json, time, queue, threading, subprocess, os, csv
 from pathlib import Path
-from datetime import datetime, timedelta
 from collections import deque
 
 # Minimal executor with AWS CLI runner only (v1)
@@ -73,16 +72,31 @@ def aws_cp_upload(local: Path, bucket: str, key: str, endpoint: str, ak: str, sk
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
-def run_profile(args):
-    data_dir = Path("./data") if not hasattr(args, "data_dir") else Path(args.data_dir)
-    # Collect files according to 30/50/20 groups if present
-    groups = [data_dir/"small", data_dir/"medium", data_dir/"large"]
+def gather_files(root: Path):
     files = []
-    for g in groups:
-        if g.exists():
-            files.extend([p for p in g.iterdir() if p.is_file()])
+    for p in root.rglob("*"):
+        # ignore hidden files like .DS_Store
+        name = p.name
+        if name.startswith('.'):
+            continue
+        # accept files and symlinks to files
+        try:
+            if p.is_file():
+                files.append(p)
+        except OSError:
+            continue
+    return files
+
+
+def run_profile(args):
+    data_root = Path(args.data_dir).resolve()
+    if not data_root.exists():
+        print(f"Data dir not found: {data_root}")
+        return
+
+    files = gather_files(data_root)
     if not files:
-        print("No dataset files found under ./data. Run 's3flood dataset-create' first.")
+        print(f"No dataset files found under {data_root}")
         return
 
     q = queue.Queue()
