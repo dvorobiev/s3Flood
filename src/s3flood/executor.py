@@ -62,6 +62,7 @@ class Metrics:
         self.last_upload = None
         self.last_download = None
         self.upload_latencies = []
+        self.download_latencies = []
         with open(self.csv_path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["ts_start","ts_end","op","bytes","status","latency_ms","error"])
             w.writeheader()
@@ -91,6 +92,7 @@ class Metrics:
                     self.read_ops_ok += 1
                     self.read_bytes += nbytes
                     self.last_download = {"bytes": nbytes, "lat_ms": lat_ms, "ended": end}
+                    self.download_latencies.append(lat_ms)
                 elif op == "upload":
                     self.write_ops_ok += 1
                     self.write_bytes += nbytes
@@ -116,10 +118,11 @@ class Metrics:
             return data["lat_ms"]
         return None
 
-    def latency_percentiles(self):
-        if not self.upload_latencies:
+    def latency_percentiles(self, op_type="upload"):
+        latencies = self.upload_latencies if op_type == "upload" else self.download_latencies
+        if not latencies:
             return None, None, None
-        data = sorted(self.upload_latencies)
+        data = sorted(latencies)
         median = statistics.median(data)
         p90_idx = max(int(len(data) * 0.9) - 1, 0)
         p95_idx = max(int(len(data) * 0.95) - 1, 0)
@@ -142,15 +145,7 @@ class Metrics:
         return out
 
 
-def aws_cp_upload(
-    local: Path,
-    bucket: str,
-    key: str,
-    endpoint: str,
-    access_key: str | None,
-    secret_key: str | None,
-    aws_profile: str | None,
-):
+def _get_aws_env(access_key: str | None, secret_key: str | None, aws_profile: str | None) -> dict:
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
     if aws_profile:
@@ -164,8 +159,36 @@ def aws_cp_upload(
         env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
+    return env
+
+
+def aws_cp_upload(
+    local: Path,
+    bucket: str,
+    key: str,
+    endpoint: str,
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+):
+    env = _get_aws_env(access_key, secret_key, aws_profile)
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
+def aws_cp_download(
+    bucket: str,
+    key: str,
+    endpoint: str,
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+):
+    env = _get_aws_env(access_key, secret_key, aws_profile)
+    url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
+    devnull = "NUL" if os.name == "nt" else "/dev/null"
+    cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
@@ -248,26 +271,37 @@ def run_profile(args):
     stop = threading.Event()
     active_lock = threading.Lock()
     active_uploads = 0
+    active_downloads = 0
     active_jobs: dict[int, Job] = {}
     group_lock = threading.Lock()
     pending_lock = threading.Lock()
+    uploaded_keys = []  # список успешно загруженных ключей для последующего чтения
+    uploaded_keys_lock = threading.Lock()
+    upload_phase_done = threading.Event()
 
     def worker():
-        nonlocal active_uploads
+        nonlocal active_uploads, active_downloads
         while not stop.is_set():
             try:
                 op, job = q.get(timeout=0.5)
             except queue.Empty:
-                if not args.infinite:
+                # Если upload фаза завершена и очередь пуста, завершаем worker
+                if upload_phase_done.is_set() and q.empty():
                     break
+                if not args.infinite:
+                    continue
                 else:
                     continue
             start = time.time()
             with active_lock:
-                active_uploads += 1
+                if op == "upload":
+                    active_uploads += 1
+                elif op == "download":
+                    active_downloads += 1
                 active_jobs[threading.get_ident()] = job
             with pending_lock:
-                pending_counts[job.group] -= 1
+                if op == "upload":
+                    pending_counts[job.group] -= 1
             if op == "upload":
                 endpoint = next_endpoint()
                 res = aws_cp_upload(
@@ -289,11 +323,31 @@ def run_profile(args):
                         grp = groups[job.group]
                         grp["done_files"] += 1
                         grp["done_bytes"] += nbytes
+                    with uploaded_keys_lock:
+                        uploaded_keys.append(job.path.name)
                 else:
                     with group_lock:
                         groups[job.group]["errors"] += 1
+            elif op == "download":
+                endpoint = next_endpoint()
+                res = aws_cp_download(
+                    args.bucket,
+                    job.path.name,
+                    endpoint,
+                    getattr(args, "access_key", None),
+                    getattr(args, "secret_key", None),
+                    getattr(args, "aws_profile", None),
+                )
+                ok = res.returncode == 0
+                err = None if ok else (res.stderr[-200:] if res.stderr else "unknown")
+                end = time.time()
+                nbytes = job.size
+                metrics.record("download", start, end, nbytes, ok, err)
             with active_lock:
-                active_uploads -= 1
+                if op == "upload":
+                    active_uploads -= 1
+                elif op == "download":
+                    active_downloads -= 1
                 active_jobs.pop(threading.get_ident(), None)
             q.task_done()
 
@@ -304,19 +358,42 @@ def run_profile(args):
 
     last_print = 0
     first_frame = True
+    download_phase_started = False
     try:
         while any(t.is_alive() for t in threads):
             time.sleep(0.5)
             now = time.time()
+            
+            # Проверяем, завершены ли все upload операции, и начинаем download
+            with pending_lock:
+                upload_pending = q.qsize()
+            with active_lock:
+                upload_active = active_uploads
+            if not download_phase_started and upload_pending == 0 and upload_active == 0 and args.profile == "write-heavy":
+                with uploaded_keys_lock:
+                    if uploaded_keys:
+                        download_phase_started = True
+                        print(f"\n[Phase 2] Starting read test: {len(uploaded_keys)} files to download to /dev/null")
+                        # Создаём Job объекты для download из загруженных ключей
+                        key_to_job = {job.path.name: job for job in jobs}
+                        for key in uploaded_keys:
+                            if key in key_to_job:
+                                q.put(("download", key_to_job[key]))
+                        # Устанавливаем флаг только после добавления всех задач
+                        upload_phase_done.set()
+            
             if now - last_print >= 2.0:
                 rbps, wbps, ops_per_sec = metrics.current_rates(5.0)
                 files_done = metrics.write_ops_ok
+                files_read = metrics.read_ops_ok
                 files_err = metrics.err_ops
                 files_left = max(total_files - files_done - files_err, 0)
                 avg_wbps = metrics.avg_write_rate()
                 avg_rbps = metrics.avg_read_rate()
                 with active_lock:
-                    inflight = active_uploads
+                    inflight = active_uploads + active_downloads
+                    active_uploads_snap = active_uploads
+                    active_downloads_snap = active_downloads
                     active_snapshot = list(active_jobs.values())
                 with pending_lock:
                     pending = q.qsize()
@@ -341,23 +418,32 @@ def run_profile(args):
                     last_info = f"{last_size_mb:.1f} MB in {last_dur:.2f}s"
                 else:
                     last_info = "n/a"
-                median, p90, p95 = metrics.latency_percentiles()
+                median_up, p90_up, p95_up = metrics.latency_percentiles("upload")
+                median_dn, p90_dn, p95_dn = metrics.latency_percentiles("download")
                 lat_line = "n/a"
-                if median is not None:
-                    lat_line = f"p50={median/1000:.2f}s p90={p90/1000:.2f}s p95={p95/1000:.2f}s"
+                if median_up is not None or median_dn is not None:
+                    parts = []
+                    if median_up is not None:
+                        parts.append(f"W:p50={median_up/1000:.2f}s p90={p90_up/1000:.2f}s")
+                    if median_dn is not None:
+                        parts.append(f"R:p50={median_dn/1000:.2f}s p90={p90_dn/1000:.2f}s")
+                    lat_line = " | ".join(parts)
                 plain_lines: list[str] = []
                 styled_lines: list[tuple[str, tuple[str, ...], bool]] = []
                 header = f"S3Flood | t={elapsed:6.1f}s | ETA {eta_str}"
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
-                files_line = f"Files {files_done}/{total_files} ({pct_files:.1f}%) | Bytes {format_bytes(bytes_done)} / {format_bytes(total_bytes)} ({pct_bytes:.1f}%) | Err {files_err}"
+                bytes_read = metrics.read_bytes
+                read_pct = (files_read / total_files * 100) if total_files and download_phase_started else 0.0
+                phase_info = " [READ]" if download_phase_started else " [WRITE]"
+                files_line = f"Files W:{files_done}/{total_files} ({pct_files:.1f}%) R:{files_read}/{total_files} ({read_pct:.1f}%){phase_info} | Bytes W:{format_bytes(bytes_done)} R:{format_bytes(bytes_read)} | Err {files_err}"
                 files_color = (ANSI_RED,) if files_err > 0 else (ANSI_BOLD, ANSI_GREEN)
                 plain_lines.append(files_line)
                 styled_lines.append((files_line, files_color, False))
-                load_line = f"Load active {inflight}/{args.threads} | queue {pending} | ops {ops_per_sec:.2f}/s"
+                load_line = f"Load active {inflight}/{args.threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} | ops {ops_per_sec:.2f}/s"
                 plain_lines.append(load_line)
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
-                rate_line = f"Rates cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s | last {last_info}"
+                rate_line = f"Rates W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s | R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
                 plain_lines.append(rate_line)
                 styled_lines.append((rate_line, (ANSI_BOLD, ANSI_MAGENTA), True))
                 latency_line = f"Latency {lat_line}"
