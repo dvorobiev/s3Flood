@@ -3,7 +3,7 @@ from __future__ import annotations
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
@@ -15,6 +15,14 @@ class RunConfigModel(BaseModel):
     profile: Optional[str] = None
     client: Optional[str] = None
     endpoint: Optional[str] = None
+    endpoints: Optional[List[str]] = Field(
+        default=None,
+        validation_alias=AliasChoices("endpoints", "endpoint_list"),
+    )
+    endpoint_mode: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("endpoint_mode", "endpoint-mode"),
+    )
     bucket: Optional[str] = None
     access_key: Optional[str] = Field(
         default=None,
@@ -43,6 +51,8 @@ class RunSettings:
     profile: str
     client: str
     endpoint: str
+    endpoints: List[str]
+    endpoint_mode: str
     bucket: str
     access_key: Optional[str]
     secret_key: Optional[str]
@@ -89,10 +99,22 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         raise SystemExit("run: missing profile (use --profile or set in config file)")
 
     client = pick("client", default="awscli")
+    endpoint_mode = pick("endpoint_mode", default="round-robin")
+    endpoints = pick("endpoints")
     endpoint = pick("endpoint")
     bucket = pick("bucket")
-    if endpoint is None:
-        raise SystemExit("run: missing endpoint (use --endpoint or set in config file)")
+    if endpoints:
+        endpoints = [str(ep) for ep in endpoints if ep]
+    if endpoints:
+        primary_endpoint = endpoints[0]
+    else:
+        primary_endpoint = endpoint
+    if not primary_endpoint:
+        raise SystemExit("run: missing endpoint(s) (use --endpoint/--endpoints or set in config file)")
+    if not endpoints:
+        endpoints = [primary_endpoint]
+    if endpoint_mode not in {"round-robin", "random"}:
+        endpoint_mode = "round-robin"
     if bucket is None:
         raise SystemExit("run: missing bucket (use --bucket or set in config file)")
 
@@ -112,7 +134,9 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     return RunSettings(
         profile=profile,
         client=client,
-        endpoint=endpoint,
+        endpoint=primary_endpoint,
+        endpoints=endpoints,
+        endpoint_mode=endpoint_mode,
         bucket=bucket,
         access_key=access_key,
         secret_key=secret_key,

@@ -91,6 +91,10 @@ python -m s3flood run \
   - Можно задать `access_key`/`secret_key` в конфиге или CLI.
   - Либо указать `aws_profile` (или `--aws-profile`) — будет использован выбранный профиль AWS CLI.
   - Если ни ключи, ни профиль не заданы, AWS CLI применит системную конфигурацию (`~/.aws/credentials`, переменные окружения).
+- Кластерный режим:
+  - Вместо `endpoint` можно указать `endpoints: ["http://node1:9000","http://node2:9000"]`.
+  - Стратегия выбора задаётся `endpoint_mode: round-robin` (по умолчанию) или `random`.
+  - Те же значения можно передать через CLI: `--endpoints http://node1:9000 http://node2:9000 --endpoint-mode random`.
 - Для примера реального стенда (HTTP `192.168.20.35:9080`, bucket `cluster_test`) достаточно обновить значения в `config.local.yaml` и выполнить `python -m s3flood run --config config.local.yaml`.
 
 ### Профили (на сегодня)
@@ -105,3 +109,8 @@ python -m s3flood run \
 
 ### Лицензия
 MIT. См. LICENSE.
+
+### Версии и релизы
+- Версия пакета хранится в `pyproject.toml` и `VERSION`.
+- Тег формата `vX.Y.Z` в GitHub автоматически запускает workflow `Release`, который собирает wheel/sdist и публикует GitHub Release с артефактами.
+- Изменения фиксируем через `CHANGELOG.md`.

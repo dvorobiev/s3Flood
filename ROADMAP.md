@@ -1,30 +1,23 @@
 ## Roadmap
 
-Этап 1 — Минимальный CLI (сделано/в процессе)
-- [x] Структура проекта (`src/`, `pyproject.toml`, ruff/black)
-- [x] CLI: `dataset-create`, `run`
-- [x] Dataset: группы small/medium/large, auto-планирование, симлинки
-- [x] Executor: профиль `write-heavy` с AWS CLI, метрики CSV/JSON
-- [ ] Базовые pytest-тесты и smoke в CI (MinIO)
+### Высокий приоритет
+- [ ] Автотесты: pytest + smoke-сценарий против MinIO в CI (Linux и Windows).
+- [ ] Профили нагрузки: `read-heavy`, `write-heavy`, `mixed-70-30`, `single-thread`, `multi-thread`, паттерны `sustained|bursty`, warmup.
+- [ ] Тест чтения из бакета (поток в `/dev/null`, без нагрузки на диск).
+- [ ] Смешанные режимы (одновременный upload/download, общая очередь).
+- [ ] Удаление загруженных объектов после завершения профиля или по опции `--cleanup`.
+- [ ] Ретраи с экспоненциальным backoff, таймауты, лимиты очередей.
 
-Этап 2 — Клиенты и профили
-- [ ] Интерфейс `Runner` и плагины: `s5cmd`, `rclone`, `awscli`
-- [ ] Профили: `read-heavy`, `mixed-70-30`, `single-thread`, `multi-thread`
-- [ ] Параметры: `--pattern sustained|bursty`, `--warmup`
-- [ ] Ретраи с экспоненциальным backoff, таймауты, лимиты очередей
+### Средний приоритет
+- [ ] Интерфейс `Runner` и дополнительные клиенты: `s5cmd`, `rclone`, (в перспективе — кастомные агенты).
+- [ ] Расширенный CLI/TUI: меню выбора профиля, статуса и конфигов.
+- [ ] Расширенные метрики: P50/P90/P99 для всех операций, экспорт в Prometheus-совместимый формат.
+- [ ] Документация: примеры конфигов (`examples/configs/*.yaml`), подробные гайды по профилям, Quickstart Linux/Windows.
+- [ ] Поддержка чтения/записи с ограничениями IOPS/throughput, базовый throttling.
 
-Этап 3 — Метрики и отчёты
-- [ ] P50/P90/P99 latency для всех операций
-- [ ] Экспорт: CSV (операции), JSON (аггрегаты), опц. Prometheus-текст
-- [ ] Удобный TUI (необязательно)
-
-Этап 4 — Удобство и дистрибуция
-- [ ] Примеры конфигов (`examples/configs/*.yaml`)
-- [ ] Документация по профилям и клиентам, Quickstart Linux/Windows
-- [ ] PyInstaller сборки (win/linux) — опционально
-
-Этап 5 — Оптимизации
-- [ ] Пул задач и ограничения параллельности (IO/CPU)
-- [ ] Ограничения IOPS/throughput, распределения размеров (Pareto/Zipf)
+### Низкий приоритет / дальше
+- [ ] PyInstaller/standalone сборки для Linux/Windows.
+- [ ] Расширенные распределения наборов данных (Pareto/Zipf).
+- [ ] Улучшенный TUI (rich/textual) с графиками в реальном времени.
 
 

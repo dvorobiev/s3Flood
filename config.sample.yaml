@@ -2,7 +2,13 @@
 run:
   profile: write-heavy
   client: awscli
+  # Один endpoint...
   endpoint: "http://192.168.20.35:9080"
+  # ...или кластерный режим (см. endpoint_mode: round-robin|random)
+  # endpoints:
+  #   - "http://192.168.20.35:9080"
+  #   - "http://192.168.20.36:9080"
+  # endpoint_mode: round-robin
   bucket: cluster_test
   # Варианты аутентификации:
   # 1. Указать access/secret ключи вручную (как ниже) — не храните их в репозитории.

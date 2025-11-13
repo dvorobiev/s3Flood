@@ -21,6 +21,8 @@ def main():
     runp.add_argument("--profile", choices=["write-heavy","read-heavy","mixed-70-30"], default=None)
     runp.add_argument("--client", choices=["awscli","rclone","s3cmd"], default=None)
     runp.add_argument("--endpoint", default=None)
+    runp.add_argument("--endpoints", nargs="+", default=None, help="Список endpoint'ов для кластерного режима")
+    runp.add_argument("--endpoint-mode", choices=["round-robin","random"], default=None, help="Стратегия выбора endpoint'а при кластерном режиме")
     runp.add_argument("--bucket", default=None)
     runp.add_argument("--access-key", dest="access_key", default=None)
     runp.add_argument("--secret-key", dest="secret_key", default=None)

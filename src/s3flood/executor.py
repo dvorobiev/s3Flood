@@ -1,4 +1,4 @@
-import json, time, queue, threading, subprocess, os, csv, statistics, sys, re
+import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass
@@ -129,6 +129,8 @@ class Metrics:
         dur = max(time.time() - self._start, 1e-6)
         out = {
             "duration_sec": dur,
+            "write_bytes": self.write_bytes,
+            "read_bytes": self.read_bytes,
             "read_MBps_avg": self.read_bytes/1024/1024/dur,
             "write_MBps_avg": self.write_bytes/1024/1024/dur,
             "read_ok_ops": self.read_ops_ok,
@@ -214,6 +216,29 @@ def run_profile(args):
         print(f"Failed to stat dataset files: {e}")
         return
 
+    endpoints_list = list(getattr(args, "endpoints", []) or [])
+    if not endpoints_list:
+        maybe_single = getattr(args, "endpoint", None)
+        if maybe_single:
+            endpoints_list = [maybe_single]
+    endpoint_mode = getattr(args, "endpoint_mode", "round-robin") or "round-robin"
+    endpoint_mode = endpoint_mode if endpoint_mode in {"round-robin", "random"} else "round-robin"
+    endpoint_lock = threading.Lock()
+    endpoint_rr_index = 0
+
+    def next_endpoint() -> str:
+        nonlocal endpoint_rr_index
+        if not endpoints_list:
+            raise RuntimeError("No endpoints configured")
+        if len(endpoints_list) == 1:
+            return endpoints_list[0]
+        if endpoint_mode == "random":
+            return random.choice(endpoints_list)
+        with endpoint_lock:
+            endpoint = endpoints_list[endpoint_rr_index]
+            endpoint_rr_index = (endpoint_rr_index + 1) % len(endpoints_list)
+            return endpoint
+
     q = queue.Queue()
     pending_counts = {g: info["total_files"] for g, info in groups.items()}
     for job in jobs:
@@ -244,11 +269,12 @@ def run_profile(args):
             with pending_lock:
                 pending_counts[job.group] -= 1
             if op == "upload":
+                endpoint = next_endpoint()
                 res = aws_cp_upload(
                     job.path,
                     args.bucket,
                     job.path.name,
-                    args.endpoint,
+                    endpoint,
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
