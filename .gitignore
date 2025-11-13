@@ -1,3 +1,22 @@
+__pycache__/
+.pytest_cache/
+.venv/
+.env
+*.egg-info/
+dist/
+build/
+
+# Local datasets and outputs
+loadset/
+data/
+out.csv
+out.json
+report.json
+metrics.csv
+
+# OS/editor
+.DS_Store
+*.code-workspace
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

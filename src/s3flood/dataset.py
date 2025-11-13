@@ -41,8 +41,9 @@ def make_seed_files(base_dir: Path, limits):
 
 
 def plan_and_generate(path: str, target_bytes: str, use_symlinks: bool, min_counts: str, group_limits: str, safety_ratio: float):
-    base = Path(path)
+    base = Path(path).expanduser()
     ensure_dir(base)
+    base = base.resolve()
 
     mins = tuple(int(x) for x in min_counts.split(","))
     limits = tuple(parse_size(x) for x in group_limits.split(","))
@@ -72,7 +73,8 @@ def plan_and_generate(path: str, target_bytes: str, use_symlinks: bool, min_coun
             key = gdir / f"{uuid.uuid4()}.bin"
             if use_symlinks:
                 if not key.exists():
-                    os.symlink(seed, key)
+                    rel_target = os.path.relpath(seed, start=gdir)
+                    os.symlink(rel_target, key)
                 sz = seed.stat().st_size
             else:
                 with open(key, "wb") as fh:
@@ -84,7 +86,8 @@ def plan_and_generate(path: str, target_bytes: str, use_symlinks: bool, min_coun
         while total_bytes + seed.stat().st_size <= bytes_target:
             key = gdir / f"{uuid.uuid4()}.bin"
             if use_symlinks:
-                os.symlink(seed, key)
+                rel_target = os.path.relpath(seed, start=gdir)
+                os.symlink(rel_target, key)
                 sz = seed.stat().st_size
             else:
                 with open(key, "wb") as fh:
