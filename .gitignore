@@ -14,6 +14,10 @@ out.json
 report.json
 metrics.csv
 
+# Local configs (не коммитим реальные креденшлы)
+config.local.yaml
+*.local.yaml
+
 # OS/editor
 .DS_Store
 *.code-workspace

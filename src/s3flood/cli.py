@@ -1,4 +1,5 @@
 import argparse
+from .config import load_run_config, resolve_run_settings
 from .dataset import plan_and_generate
 from .executor import run_profile
 
@@ -16,17 +17,19 @@ def main():
     dcreate.add_argument("--safety-ratio", type=float, default=0.8)
 
     runp = sub.add_parser("run")
-    runp.add_argument("--profile", choices=["write-heavy","read-heavy","mixed-70-30"], required=True)
-    runp.add_argument("--client", choices=["awscli","rclone","s3cmd"], default="awscli")
-    runp.add_argument("--endpoint", required=True)
-    runp.add_argument("--bucket", required=True)
-    runp.add_argument("--access-key", required=True)
-    runp.add_argument("--secret-key", required=True)
-    runp.add_argument("--threads", type=int, default=8)
-    runp.add_argument("--infinite", action="store_true")
-    runp.add_argument("--report", default="report.json")
-    runp.add_argument("--metrics", default="metrics.csv")
-    runp.add_argument("--data-dir", default="./data", help="Path to dataset root (will scan recursively)")
+    runp.add_argument("--config", help="YAML-файл с параметрами запуска (endpoint, bucket, креденшлы)")
+    runp.add_argument("--profile", choices=["write-heavy","read-heavy","mixed-70-30"], default=None)
+    runp.add_argument("--client", choices=["awscli","rclone","s3cmd"], default=None)
+    runp.add_argument("--endpoint", default=None)
+    runp.add_argument("--bucket", default=None)
+    runp.add_argument("--access-key", dest="access_key", default=None)
+    runp.add_argument("--secret-key", dest="secret_key", default=None)
+    runp.add_argument("--aws-profile", dest="aws_profile", default=None)
+    runp.add_argument("--threads", type=int, default=None)
+    runp.add_argument("--infinite", action="store_true", default=None)
+    runp.add_argument("--report", default=None)
+    runp.add_argument("--metrics", default=None)
+    runp.add_argument("--data-dir", dest="data_dir", default=None, help="Путь к корню датасета (сканируется рекурсивно)")
 
     args = parser.parse_args()
 
@@ -40,4 +43,11 @@ def main():
             safety_ratio=args.safety_ratio,
         )
     elif args.cmd == "run":
-        run_profile(args)
+        config_model = None
+        if args.config:
+            try:
+                config_model = load_run_config(args.config)
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"Не удалось прочитать конфиг: {exc}") from exc
+        settings = resolve_run_settings(args, config_model)
+        run_profile(settings.to_namespace())

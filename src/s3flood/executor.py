@@ -140,9 +140,28 @@ class Metrics:
         return out
 
 
-def aws_cp_upload(local: Path, bucket: str, key: str, endpoint: str, ak: str, sk: str):
+def aws_cp_upload(
+    local: Path,
+    bucket: str,
+    key: str,
+    endpoint: str,
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+):
     env = os.environ.copy()
-    env.update({"AWS_ACCESS_KEY_ID": ak, "AWS_SECRET_ACCESS_KEY": sk, "AWS_EC2_METADATA_DISABLED": "true"})
+    env["AWS_EC2_METADATA_DISABLED"] = "true"
+    if aws_profile:
+        env["AWS_PROFILE"] = aws_profile
+        env.pop("AWS_ACCESS_KEY_ID", None)
+        env.pop("AWS_SECRET_ACCESS_KEY", None)
+    elif access_key and secret_key:
+        env["AWS_ACCESS_KEY_ID"] = access_key
+        env["AWS_SECRET_ACCESS_KEY"] = secret_key
+    else:
+        env.pop("AWS_PROFILE", None)
+        env.pop("AWS_ACCESS_KEY_ID", None)
+        env.pop("AWS_SECRET_ACCESS_KEY", None)
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -225,7 +244,15 @@ def run_profile(args):
             with pending_lock:
                 pending_counts[job.group] -= 1
             if op == "upload":
-                res = aws_cp_upload(job.path, args.bucket, job.path.name, args.endpoint, args.access_key, args.secret_key)
+                res = aws_cp_upload(
+                    job.path,
+                    args.bucket,
+                    job.path.name,
+                    args.endpoint,
+                    getattr(args, "access_key", None),
+                    getattr(args, "secret_key", None),
+                    getattr(args, "aws_profile", None),
+                )
                 ok = res.returncode == 0
                 err = None if ok else (res.stderr[-200:] if res.stderr else "unknown")
                 end = time.time()

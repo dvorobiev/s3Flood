@@ -1,0 +1,17 @@
+# Пример конфига запуска s3flood. Скопируйте в config.local.yaml и подставьте свои значения.
+run:
+  profile: write-heavy
+  client: awscli
+  endpoint: "http://192.168.20.35:9080"
+  bucket: cluster_test
+  # Варианты аутентификации:
+  # 1. Указать access/secret ключи вручную (как ниже) — не храните их в репозитории.
+  # 2. Либо удалить access_key/secret_key и прописать aws_profile (или воспользоваться AWS CLI профилем по умолчанию).
+  access_key: "YOUR_ACCESS_KEY"
+  secret_key: "YOUR_SECRET_KEY"
+  # aws_profile: default
+  threads: 8
+  data_dir: "./loadset/data"
+  report: "out.json"
+  metrics: "out.csv"
+

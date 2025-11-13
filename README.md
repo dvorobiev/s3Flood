@@ -80,6 +80,19 @@ python -m s3flood run \
    - В `out.json` посмотреть агрегаты throughput/latency.
    - При необходимости повторно запустить `dataset-create` (например, с `--use-symlinks` для быстрого обновления).
 
+### Конфигурация запуска и реальные бэкенды
+- Создайте файл `config.local.yaml` (см. `config.sample.yaml`) и пропишите значения по умолчанию: `endpoint`, `bucket`, креденшлы, путь к датасету, имя профиля.
+- Запуск с конфигом:
+  ```bash
+  python -m s3flood run --config config.local.yaml
+  ```
+- Любой флаг CLI перекрывает значение из конфига (например, `--threads 16` или `--profile read-heavy` в будущем).
+- Аутентификация:
+  - Можно задать `access_key`/`secret_key` в конфиге или CLI.
+  - Либо указать `aws_profile` (или `--aws-profile`) — будет использован выбранный профиль AWS CLI.
+  - Если ни ключи, ни профиль не заданы, AWS CLI применит системную конфигурацию (`~/.aws/credentials`, переменные окружения).
+- Для примера реального стенда (HTTP `192.168.20.35:9080`, bucket `cluster_test`) достаточно обновить значения в `config.local.yaml` и выполнить `python -m s3flood run --config config.local.yaml`.
+
 ### Профили (на сегодня)
 - `write-heavy`: 100% upload существующих файлов датасета (равномерно по группам размеров).
 
