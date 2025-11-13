@@ -8,11 +8,14 @@ build/
 
 # Local datasets and outputs
 loadset/
+loadset-*/
 data/
 out.csv
 out.json
 report.json
 metrics.csv
+real-*.csv
+real-*.json
 
 # Local configs (не коммитим реальные креденшлы)
 config.local.yaml
