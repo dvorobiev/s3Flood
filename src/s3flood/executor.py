@@ -400,6 +400,7 @@ def run_profile(args):
                     pending_snapshot = pending_counts.copy()
                 elapsed = metrics.elapsed()
                 bytes_done = metrics.write_bytes
+                bytes_read = metrics.read_bytes
                 pct_files = (files_done / total_files * 100) if total_files else 0.0
                 pct_bytes = (bytes_done / total_bytes * 100) if total_bytes else 0.0
                 wbps_mb = wbps / 1024 / 1024
@@ -407,17 +408,43 @@ def run_profile(args):
                 avg_wbps_mb = avg_wbps / 1024 / 1024
                 avg_rbps_mb = avg_rbps / 1024 / 1024
                 ops_per_sec = max(ops_per_sec, 0.0)
+                
+                # ETA: для фазы записи или чтения
                 eta_sec = None
-                if wbps > 1 and bytes_done < total_bytes:
-                    eta_sec = (total_bytes - bytes_done) / wbps
-                eta_str = f"{eta_sec/60:.1f} min" if eta_sec and eta_sec > 60 else (f"{eta_sec:.0f} s" if eta_sec else "n/a")
-                last_upload = metrics.last_upload
-                if last_upload:
-                    last_size_mb = last_upload["bytes"] / 1024 / 1024
-                    last_dur = last_upload["lat_ms"] / 1000
-                    last_info = f"{last_size_mb:.1f} MB in {last_dur:.2f}s"
+                if download_phase_started:
+                    # В фазе чтения: считаем ETA по оставшимся файлам для чтения
+                    with uploaded_keys_lock:
+                        total_to_read = len(uploaded_keys)
+                    files_left_read = max(total_to_read - files_read, 0)
+                    if rbps > 1 and files_left_read > 0:
+                        # Приблизительная оценка: средний размер файла * оставшиеся файлы / скорость чтения
+                        avg_file_size = bytes_read / files_read if files_read > 0 else (total_bytes / total_files if total_files > 0 else 0)
+                        bytes_left_read = avg_file_size * files_left_read
+                        eta_sec = bytes_left_read / rbps
                 else:
-                    last_info = "n/a"
+                    # В фазе записи
+                    if wbps > 1 and bytes_done < total_bytes:
+                        eta_sec = (total_bytes - bytes_done) / wbps
+                eta_str = f"{eta_sec/60:.1f} min" if eta_sec and eta_sec > 60 else (f"{eta_sec:.0f} s" if eta_sec else "n/a")
+                
+                # Показываем последнюю операцию (upload или download)
+                last_info = "n/a"
+                if download_phase_started:
+                    last_download = metrics.last_download
+                    if last_download:
+                        last_size_mb = last_download["bytes"] / 1024 / 1024
+                        last_dur = last_download["lat_ms"] / 1000
+                        last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
+                    elif metrics.last_upload:
+                        last_size_mb = metrics.last_upload["bytes"] / 1024 / 1024
+                        last_dur = metrics.last_upload["lat_ms"] / 1000
+                        last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
+                else:
+                    last_upload = metrics.last_upload
+                    if last_upload:
+                        last_size_mb = last_upload["bytes"] / 1024 / 1024
+                        last_dur = last_upload["lat_ms"] / 1000
+                        last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
                 median_up, p90_up, p95_up = metrics.latency_percentiles("upload")
                 median_dn, p90_dn, p95_dn = metrics.latency_percentiles("download")
                 lat_line = "n/a"
@@ -433,17 +460,25 @@ def run_profile(args):
                 header = f"S3Flood | t={elapsed:6.1f}s | ETA {eta_str}"
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
-                bytes_read = metrics.read_bytes
-                read_pct = (files_read / total_files * 100) if total_files and download_phase_started else 0.0
-                phase_info = " [READ]" if download_phase_started else " [WRITE]"
-                files_line = f"Files W:{files_done}/{total_files} ({pct_files:.1f}%) R:{files_read}/{total_files} ({read_pct:.1f}%){phase_info} | Bytes W:{format_bytes(bytes_done)} R:{format_bytes(bytes_read)} | Err {files_err}"
+                # Для фазы чтения: учитываем активные операции и pending
+                if download_phase_started:
+                    with uploaded_keys_lock:
+                        total_to_read = len(uploaded_keys)
+                    files_in_progress_read = files_read + active_downloads_snap
+                    read_pct = (files_in_progress_read / total_to_read * 100) if total_to_read > 0 else 0.0
+                    phase_info = " [READ]"
+                    files_line = f"Files W:{files_done}/{total_files} ({pct_files:.1f}%) R:{files_read}/{total_to_read} ({read_pct:.1f}%){phase_info} | Bytes W:{format_bytes(bytes_done)} R:{format_bytes(bytes_read)} | Err {files_err}"
+                else:
+                    read_pct = 0.0
+                    phase_info = " [WRITE]"
+                    files_line = f"Files W:{files_done}/{total_files} ({pct_files:.1f}%) R:{files_read}/{total_files} ({read_pct:.1f}%){phase_info} | Bytes W:{format_bytes(bytes_done)} R:{format_bytes(bytes_read)} | Err {files_err}"
                 files_color = (ANSI_RED,) if files_err > 0 else (ANSI_BOLD, ANSI_GREEN)
                 plain_lines.append(files_line)
                 styled_lines.append((files_line, files_color, False))
                 load_line = f"Load active {inflight}/{args.threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} | ops {ops_per_sec:.2f}/s"
                 plain_lines.append(load_line)
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
-                rate_line = f"Rates W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s | R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
+                rate_line = f"Rates W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s | R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s | last {last_info}"
                 plain_lines.append(rate_line)
                 styled_lines.append((rate_line, (ANSI_BOLD, ANSI_MAGENTA), True))
                 latency_line = f"Latency {lat_line}"
