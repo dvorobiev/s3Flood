@@ -186,10 +186,23 @@ def aws_cp_download(
     aws_profile: str | None,
 ):
     env = _get_aws_env(access_key, secret_key, aws_profile)
-    url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
+    # Используем s3api get-object вместо s3 cp, чтобы избежать ошибки обновления времени модификации /dev/null
     devnull = "NUL" if os.name == "nt" else "/dev/null"
-    cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
-    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # Извлекаем имя бакета без префикса s3://
+    bucket_name = bucket.replace("s3://", "").split("/")[0]
+    cmd = ["aws", "s3api", "get-object", "--bucket", bucket_name, "--key", key, devnull, "--endpoint-url", endpoint]
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # Если есть ошибка обновления времени модификации, но данные загружены, считаем успехом
+    if res.returncode != 0 and res.stderr:
+        if "Successfully Downloaded" in res.stderr and "unable to update the last modified time" in res.stderr:
+            # Данные загружены успешно, просто не удалось обновить время модификации
+            # Создаём фиктивный успешный результат
+            class FakeResult:
+                returncode = 0
+                stdout = res.stdout
+                stderr = ""
+            return FakeResult()
+    return res
 
 
 def gather_files(root: Path):
