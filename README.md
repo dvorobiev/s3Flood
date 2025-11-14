@@ -11,21 +11,53 @@
 Планируемая архитектура и расширения описаны в ROADMAP.md.
 
 ### Установка
-- Требуется Python 3.10+ и установленный `aws` CLI в `PATH`.
-- Локально:
+
+#### Быстрая установка (рекомендуется)
+
+Для Mac и Linux используйте скрипт установки:
+
 ```bash
+git clone https://github.com/dvorobiev/s3Flood.git
+cd s3Flood
+./install.sh
+```
+
+Скрипт автоматически:
+- Проверит наличие Python 3.10+ и AWS CLI
+- Создаст виртуальное окружение `.venv`
+- Установит все зависимости
+- Создаст wrapper скрипт `./s3flood` для удобного запуска
+
+После установки используйте:
+```bash
+./s3flood dataset-create --path ./loadset --use-symlinks
+./s3flood run --profile write-heavy --endpoint http://localhost:9000 --bucket test-bucket
+```
+
+#### Ручная установка
+
+Требования:
+- Python 3.10+ 
+- AWS CLI в `PATH`
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # На Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
 ### CLI
+
+После установки через `./install.sh` используйте wrapper скрипт:
+
 Создание датасета (по свободному месту на диске):
 ```bash
-python -m s3flood dataset-create --path ./loadset --use-symlinks
+./s3flood dataset-create --path ./loadset --use-symlinks
 ```
 
 Запуск записи (пример, MinIO):
 ```bash
-python -m s3flood run \
+./s3flood run \
   --profile write-heavy \
   --client awscli \
   --threads 8 \
@@ -36,6 +68,11 @@ python -m s3flood run \
   --data-dir ./loadset/data \
   --report out.json \
   --metrics out.csv
+```
+
+Альтернативно, если venv активирован:
+```bash
+python -m s3flood dataset-create --path ./loadset --use-symlinks
 ```
 
 Форматы вывода:
@@ -53,7 +90,7 @@ python -m s3flood run \
    ```
 2. Подготовить датасет (пример для каталога `./loadset`):
    ```bash
-   python -m s3flood dataset-create \
+   ./s3flood dataset-create \
      --path ./loadset \
      --target-bytes auto \
      --use-symlinks \
@@ -63,7 +100,7 @@ python -m s3flood run \
    ```
 3. Запустить нагрузку (write-heavy профиль):
    ```bash
-   python -m s3flood run \
+   ./s3flood run \
      --profile write-heavy \
      --client awscli \
      --endpoint http://localhost:9000 \
@@ -84,7 +121,7 @@ python -m s3flood run \
 - Создайте файл `config.local.yaml` (см. `config.sample.yaml`) и пропишите значения по умолчанию: `endpoint`, `bucket`, креденшлы, путь к датасету, имя профиля.
 - Запуск с конфигом:
   ```bash
-  python -m s3flood run --config config.local.yaml
+  ./s3flood run --config config.local.yaml
   ```
 - Любой флаг CLI перекрывает значение из конфига (например, `--threads 16` или `--profile read-heavy` в будущем).
 - Аутентификация:
