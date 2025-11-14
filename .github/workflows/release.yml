@@ -34,10 +34,22 @@ jobs:
           name: s3flood-${{ github.ref_name }}
           path: dist/
 
+      - name: Extract release notes from CHANGELOG
+        id: release_notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          # Extract section for this version from CHANGELOG.md
+          awk "/^### ${VERSION}/{flag=1; next} /^### /{flag=0} flag" CHANGELOG.md > release_notes.txt || echo "## Release ${VERSION}" > release_notes.txt
+          echo "notes<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: release_notes.txt
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
