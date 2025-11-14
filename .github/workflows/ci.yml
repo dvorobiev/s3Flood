@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ "feature/cli-min", "main" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "feature/cli-min", "main" ]
+    branches: [ "main" ]
 
 jobs:
   linux:
@@ -37,12 +37,21 @@ jobs:
             quay.io/minio/minio server /data --console-address ":9001"
 
       - name: Wait for MinIO
+        env:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_EC2_METADATA_DISABLED: "true"
         run: |
+          echo "Waiting for MinIO to be ready..."
           for i in {1..30}; do
-            if curl -sSf http://127.0.0.1:9000 >/dev/null; then exit 0; fi
+            if aws --endpoint-url http://127.0.0.1:9000 s3 ls >/dev/null 2>&1; then
+              echo "MinIO is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: MinIO not ready yet, waiting..."
             sleep 2
           done
-          echo "MinIO not responding" && exit 1
+          echo "MinIO not responding after 60 seconds" && exit 1
 
       - name: Create bucket
         env:
