@@ -180,3 +180,4 @@ FINAL_USAGE.md
 
 # Локальная документация по синхронизации с корпоративным Gitea
 SYNC_TO_GITEA.md
+sync-to-corporate.sh
