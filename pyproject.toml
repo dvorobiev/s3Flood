@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "s3flood"
-version = "0.2.1"
+version = "0.2.2"
 description = "Lightweight CLI for S3 throughput/load testing (Linux/Windows)"
 authors = [{name="dvorobiev"}]
 license = {text = "MIT"}
