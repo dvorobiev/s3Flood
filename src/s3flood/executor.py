@@ -373,7 +373,6 @@ def run_profile(args):
                 with uploaded_keys_lock:
                     if uploaded_keys:
                         download_phase_started = True
-                        print(f"\n[Phase 2] Starting read test: {len(uploaded_keys)} files to download to /dev/null")
                         # Создаём Job объекты для download из загруженных ключей
                         key_to_job = {job.path.name: job for job in jobs}
                         for key in uploaded_keys:
@@ -467,23 +466,88 @@ def run_profile(args):
                     files_in_progress_read = files_read + active_downloads_snap
                     read_pct = (files_in_progress_read / total_to_read * 100) if total_to_read > 0 else 0.0
                     phase_info = " [READ]"
-                    files_line = f"Files W:{files_done}/{total_files} ({pct_files:.1f}%) R:{files_read}/{total_to_read} ({read_pct:.1f}%){phase_info} | Bytes W:{format_bytes(bytes_done)} R:{format_bytes(bytes_read)} | Err {files_err}"
+                    # В фазе чтения: подсвечиваем данные чтения (R:), затемняем запись (W:)
+                    # Разделяем на части для цветового выделения
+                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
+                    r_part = f"R:{files_read}/{total_to_read} ({read_pct:.1f}%)"
+                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
+                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | Err {files_err}"
+                    files_color = (ANSI_RED,) if files_err > 0 else (ANSI_BOLD, ANSI_GREEN)
+                    # Создаём стилизованную версию: затемняем W:, подсвечиваем R:
+                    files_line_styled = f"Files {style(w_part, ANSI_DIM)} {style(r_part, ANSI_BOLD, ANSI_YELLOW)}{phase_info} | Bytes {style(w_bytes_part, ANSI_DIM)} {style(r_bytes_part, ANSI_BOLD, ANSI_YELLOW)} | Err {files_err}"
                 else:
                     read_pct = 0.0
                     phase_info = " [WRITE]"
-                    files_line = f"Files W:{files_done}/{total_files} ({pct_files:.1f}%) R:{files_read}/{total_files} ({read_pct:.1f}%){phase_info} | Bytes W:{format_bytes(bytes_done)} R:{format_bytes(bytes_read)} | Err {files_err}"
-                files_color = (ANSI_RED,) if files_err > 0 else (ANSI_BOLD, ANSI_GREEN)
+                    # В фазе записи: подсвечиваем данные записи (W:), затемняем чтение (R:)
+                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
+                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
+                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | Err {files_err}"
+                    files_color = (ANSI_RED,) if files_err > 0 else (ANSI_BOLD, ANSI_GREEN)
+                    # Создаём стилизованную версию: подсвечиваем W:, затемняем R:
+                    files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_YELLOW)} {style(r_part, ANSI_DIM)}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_YELLOW)} {style(r_bytes_part, ANSI_DIM)} | Err {files_err}"
                 plain_lines.append(files_line)
-                styled_lines.append((files_line, files_color, False))
+                styled_lines.append((files_line_styled, files_color, False))
                 load_line = f"Load active {inflight}/{args.threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} | ops {ops_per_sec:.2f}/s"
                 plain_lines.append(load_line)
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
-                rate_line = f"Rates W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s | R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s | last {last_info}"
-                plain_lines.append(rate_line)
-                styled_lines.append((rate_line, (ANSI_BOLD, ANSI_MAGENTA), True))
-                latency_line = f"Latency {lat_line}"
-                plain_lines.append(latency_line)
-                styled_lines.append((latency_line, (ANSI_DIM,), False))
+                
+                # Цветовое выделение для rates
+                if download_phase_started:
+                    # В фазе чтения: подсвечиваем R:, затемняем W:
+                    w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
+                    r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
+                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part} | last {last_info}"
+                    rate_line_styled = f"Rates {style(w_rates_part, ANSI_DIM)} | {style(r_rates_part, ANSI_BOLD, ANSI_YELLOW)} | last {style(last_info, ANSI_BOLD, ANSI_YELLOW)}"
+                else:
+                    # В фазе записи: подсвечиваем W:, затемняем R:
+                    w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
+                    r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
+                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part} | last {last_info}"
+                    rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_DIM)} | last {style(last_info, ANSI_BOLD, ANSI_YELLOW)}"
+                plain_lines.append(rate_line_plain)
+                styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_MAGENTA), True))
+                
+                # Цветовое выделение для latency
+                if lat_line != "n/a":
+                    if download_phase_started:
+                        # В фазе чтения: подсвечиваем R:, затемняем W:
+                        if "W:" in lat_line and "R:" in lat_line:
+                            parts = lat_line.split(" | ")
+                            w_lat_part = parts[0] if parts[0].startswith("W:") else ""
+                            r_lat_part = parts[1] if len(parts) > 1 and parts[1].startswith("R:") else ""
+                            if w_lat_part and r_lat_part:
+                                latency_line_styled = f"Latency {style(w_lat_part, ANSI_DIM)} | {style(r_lat_part, ANSI_BOLD, ANSI_YELLOW)}"
+                            elif r_lat_part:
+                                latency_line_styled = f"Latency {style(r_lat_part, ANSI_BOLD, ANSI_YELLOW)}"
+                            else:
+                                latency_line_styled = f"Latency {lat_line}"
+                        elif "R:" in lat_line:
+                            latency_line_styled = f"Latency {style(lat_line, ANSI_BOLD, ANSI_YELLOW)}"
+                        else:
+                            latency_line_styled = f"Latency {style(lat_line, ANSI_DIM)}"
+                    else:
+                        # В фазе записи: подсвечиваем W:, затемняем R:
+                        if "W:" in lat_line and "R:" in lat_line:
+                            parts = lat_line.split(" | ")
+                            w_lat_part = parts[0] if parts[0].startswith("W:") else ""
+                            r_lat_part = parts[1] if len(parts) > 1 and parts[1].startswith("R:") else ""
+                            if w_lat_part and r_lat_part:
+                                latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_lat_part, ANSI_DIM)}"
+                            elif w_lat_part:
+                                latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_YELLOW)}"
+                            else:
+                                latency_line_styled = f"Latency {lat_line}"
+                        elif "W:" in lat_line:
+                            latency_line_styled = f"Latency {style(lat_line, ANSI_BOLD, ANSI_YELLOW)}"
+                        else:
+                            latency_line_styled = f"Latency {style(lat_line, ANSI_DIM)}"
+                else:
+                    latency_line_styled = f"Latency {lat_line}"
+                plain_lines.append(f"Latency {lat_line}")
+                styled_lines.append((latency_line_styled, (ANSI_DIM,), False))
                 groups_title = "Groups:"
                 plain_lines.append(groups_title)
                 styled_lines.append((groups_title, (ANSI_BOLD,), False))
