@@ -227,16 +227,21 @@ def aws_cp_download(
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "get-object", "--bucket", bucket_name, "--key", key, devnull, "--endpoint-url", endpoint]
     res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # Если команда успешна (returncode == 0), возвращаем результат как есть
+    if res.returncode == 0:
+        return res
     # Если есть ошибка обновления времени модификации, но данные загружены, считаем успехом
     if res.returncode != 0 and res.stderr:
         if "Successfully Downloaded" in res.stderr and "unable to update the last modified time" in res.stderr:
             # Данные загружены успешно, просто не удалось обновить время модификации
-            # Создаём фиктивный успешный результат
+            # Создаём фиктивный успешный результат с теми же атрибутами, что и subprocess.CompletedProcess
             class FakeResult:
                 returncode = 0
                 stdout = res.stdout
                 stderr = ""
+                args = res.args
             return FakeResult()
+    # Для всех остальных ошибок возвращаем исходный результат
     return res
 
 
@@ -442,10 +447,34 @@ def run_profile(args):
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
                 )
-                if not ok and res is None:
-                    err = err or "retry failed"
                 end = time.time()
-                nbytes = job.size
+                # Если операция не успешна, формируем детальное сообщение об ошибке
+                if not ok:
+                    if res is None:
+                        err = err or "retry failed: no result"
+                    elif hasattr(res, 'returncode'):
+                        err_parts = []
+                        if res.returncode != 0:
+                            err_parts.append(f"exit_code={res.returncode}")
+                        if hasattr(res, 'stderr') and res.stderr:
+                            stderr_snippet = res.stderr[-300:] if len(res.stderr) > 300 else res.stderr
+                            err_parts.append(f"stderr={stderr_snippet}")
+                        if hasattr(res, 'stdout') and res.stdout:
+                            stdout_snippet = res.stdout[-200:] if len(res.stdout) > 200 else res.stdout
+                            err_parts.append(f"stdout={stdout_snippet}")
+                        err = err or ("; ".join(err_parts) if err_parts else "unknown error")
+                    else:
+                        err = err or f"unexpected result type: {type(res)}"
+                # Пытаемся извлечь реальный размер объекта из ответа s3api get-object
+                nbytes = job.size  # По умолчанию используем размер исходного файла
+                if ok and res and hasattr(res, 'stdout') and res.stdout:
+                    try:
+                        import json
+                        response_data = json.loads(res.stdout)
+                        if "ContentLength" in response_data:
+                            nbytes = int(response_data["ContentLength"])
+                    except (json.JSONDecodeError, ValueError, KeyError):
+                        pass  # Используем job.size если не удалось распарсить
                 metrics.record("download", start, end, nbytes, ok, err)
             with active_lock:
                 if op == "upload":
