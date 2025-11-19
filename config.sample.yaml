@@ -20,4 +20,14 @@ run:
   data_dir: "./loadset/data"
   report: "out.json"
   metrics: "out.csv"
+  # Параметры для mixed профиля
+  # mixed_read_ratio: 0.7  # Доля операций чтения (0.0-1.0), по умолчанию 0.7 для mixed-70-30
+  # Паттерны нагрузки
+  # pattern: sustained  # sustained | bursty
+  # burst_duration_sec: 10.0  # Длительность всплеска в секундах для bursty
+  # burst_intensity_multiplier: 10.0  # Множитель интенсивности для bursty
+  # Управление очередью
+  # queue_limit: 1000  # Максимальный размер очереди операций
+  # max_retries: 3  # Количество повторов при ошибке
+  # retry_backoff_base: 2.0  # Базовый множитель для экспоненциального backoff
 

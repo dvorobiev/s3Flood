@@ -44,6 +44,16 @@ class RunConfigModel(BaseModel):
     report: Optional[str] = None
     metrics: Optional[str] = None
     infinite: Optional[bool] = None
+    # Параметры для mixed профиля
+    mixed_read_ratio: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    # Паттерны нагрузки
+    pattern: Optional[str] = None  # sustained | bursty
+    burst_duration_sec: Optional[float] = Field(default=None, gt=0.0)
+    burst_intensity_multiplier: Optional[float] = Field(default=None, gt=1.0)
+    # Управление очередью
+    queue_limit: Optional[int] = Field(default=None, gt=0)
+    max_retries: Optional[int] = Field(default=None, ge=0)
+    retry_backoff_base: Optional[float] = Field(default=None, gt=1.0)
 
 
 @dataclass
@@ -62,6 +72,13 @@ class RunSettings:
     report: str
     metrics: str
     data_dir: str
+    mixed_read_ratio: Optional[float]
+    pattern: Optional[str]
+    burst_duration_sec: Optional[float]
+    burst_intensity_multiplier: Optional[float]
+    queue_limit: Optional[int]
+    max_retries: Optional[int]
+    retry_backoff_base: Optional[float]
 
     def to_namespace(self) -> Namespace:
         return Namespace(**asdict(self))
@@ -131,6 +148,21 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     secret_key = pick("secret_key")
     aws_profile = pick("aws_profile")
 
+    # Параметры для mixed профиля (по умолчанию 70% чтения, 30% записи)
+    mixed_read_ratio = pick("mixed_read_ratio")
+    if profile == "mixed-70-30" and mixed_read_ratio is None:
+        mixed_read_ratio = 0.7
+
+    # Паттерны нагрузки
+    pattern = pick("pattern", default="sustained")
+    burst_duration_sec = pick("burst_duration_sec")
+    burst_intensity_multiplier = pick("burst_intensity_multiplier", default=10.0)
+
+    # Управление очередью
+    queue_limit = pick("queue_limit")
+    max_retries = pick("max_retries", default=3)
+    retry_backoff_base = pick("retry_backoff_base", default=2.0)
+
     return RunSettings(
         profile=profile,
         client=client,
@@ -146,5 +178,12 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         report=report,
         metrics=metrics,
         data_dir=data_dir,
+        mixed_read_ratio=mixed_read_ratio,
+        pattern=pattern,
+        burst_duration_sec=burst_duration_sec,
+        burst_intensity_multiplier=burst_intensity_multiplier,
+        queue_limit=queue_limit,
+        max_retries=max_retries,
+        retry_backoff_base=retry_backoff_base,
     )
 

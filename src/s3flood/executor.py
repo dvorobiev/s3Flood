@@ -1,4 +1,4 @@
-import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random
+import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random, math
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass
@@ -44,6 +44,7 @@ class Job:
     path: Path
     size: int
     group: str
+    endpoint: str | None = None  # Привязанный endpoint для кластерного режима
 
 
 class Metrics:
@@ -205,6 +206,32 @@ def aws_cp_download(
     return res
 
 
+def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwargs):
+    """Выполняет функцию с повторными попытками и экспоненциальным backoff."""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            result = func(*args, **kwargs)
+            if hasattr(result, 'returncode') and result.returncode == 0:
+                return result, True, None
+            elif attempt < max_retries:
+                wait_time = backoff_base ** attempt
+                time.sleep(wait_time)
+                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else "unknown"
+            else:
+                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else "unknown"
+                return result, False, last_error
+        except Exception as e:
+            if attempt < max_retries:
+                wait_time = backoff_base ** attempt
+                time.sleep(wait_time)
+                last_error = str(e)
+            else:
+                last_error = str(e)
+                return None, False, last_error
+    return None, False, last_error or "max retries exceeded"
+
+
 def gather_files(root: Path):
     files = []
     for p in root.rglob("*"):
@@ -275,8 +302,21 @@ def run_profile(args):
             endpoint_rr_index = (endpoint_rr_index + 1) % len(endpoints_list)
             return endpoint
 
-    q = queue.Queue()
+    # Используем Queue с лимитом, если задан
+    queue_limit = getattr(args, "queue_limit", None)
+    q = queue.Queue(maxsize=queue_limit) if queue_limit else queue.Queue()
     pending_counts = {g: info["total_files"] for g, info in groups.items()}
+    
+    # Инициализация параметров
+    profile = getattr(args, "profile", "write-heavy")
+    mixed_read_ratio = getattr(args, "mixed_read_ratio", 0.7)
+    pattern = getattr(args, "pattern", "sustained")
+    burst_duration_sec = getattr(args, "burst_duration_sec", 10.0)
+    burst_intensity_multiplier = getattr(args, "burst_intensity_multiplier", 10.0)
+    max_retries = getattr(args, "max_retries", 3)
+    retry_backoff_base = getattr(args, "retry_backoff_base", 2.0)
+    
+    # Для всех профилей сначала загружаем данные
     for job in jobs:
         q.put(("upload", job))
     metrics = Metrics(args.metrics, args.report)
@@ -288,9 +328,15 @@ def run_profile(args):
     active_jobs: dict[int, Job] = {}
     group_lock = threading.Lock()
     pending_lock = threading.Lock()
-    uploaded_keys = []  # список успешно загруженных ключей для последующего чтения
-    uploaded_keys_lock = threading.Lock()
+    # Словарь: ключ объекта -> endpoint, через который он был загружен
+    uploaded_objects: dict[str, str] = {}
+    uploaded_objects_lock = threading.Lock()
     upload_phase_done = threading.Event()
+    
+    # Состояние для паттернов
+    burst_active = False
+    burst_start_time = None
+    pattern_lock = threading.Lock()
 
     def worker():
         nonlocal active_uploads, active_downloads
@@ -301,7 +347,7 @@ def run_profile(args):
                 # Если upload фаза завершена и очередь пуста, завершаем worker
                 if upload_phase_done.is_set() and q.empty():
                     break
-                if not args.infinite:
+                if not getattr(args, "infinite", False):
                     continue
                 else:
                     continue
@@ -317,7 +363,13 @@ def run_profile(args):
                     pending_counts[job.group] -= 1
             if op == "upload":
                 endpoint = next_endpoint()
-                res = aws_cp_upload(
+                # Сохраняем endpoint в job для последующего использования
+                job.endpoint = endpoint
+                # Используем retry с backoff
+                res, ok, err = retry_with_backoff(
+                    aws_cp_upload,
+                    max_retries,
+                    retry_backoff_base,
                     job.path,
                     args.bucket,
                     job.path.name,
@@ -326,8 +378,8 @@ def run_profile(args):
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
                 )
-                ok = res.returncode == 0
-                err = None if ok else (res.stderr[-200:] if res.stderr else "unknown")
+                if not ok and res is None:
+                    err = err or "retry failed"
                 end = time.time()
                 nbytes = job.size
                 metrics.record("upload", start, end, nbytes, ok, err)
@@ -336,14 +388,19 @@ def run_profile(args):
                         grp = groups[job.group]
                         grp["done_files"] += 1
                         grp["done_bytes"] += nbytes
-                    with uploaded_keys_lock:
-                        uploaded_keys.append(job.path.name)
+                    with uploaded_objects_lock:
+                        uploaded_objects[job.path.name] = endpoint
                 else:
                     with group_lock:
                         groups[job.group]["errors"] += 1
             elif op == "download":
-                endpoint = next_endpoint()
-                res = aws_cp_download(
+                # Используем endpoint из job, если он был сохранён при записи, иначе выбираем новый
+                endpoint = job.endpoint if job.endpoint else next_endpoint()
+                # Используем retry с backoff
+                res, ok, err = retry_with_backoff(
+                    aws_cp_download,
+                    max_retries,
+                    retry_backoff_base,
                     args.bucket,
                     job.path.name,
                     endpoint,
@@ -351,8 +408,8 @@ def run_profile(args):
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
                 )
-                ok = res.returncode == 0
-                err = None if ok else (res.stderr[-200:] if res.stderr else "unknown")
+                if not ok and res is None:
+                    err = err or "retry failed"
                 end = time.time()
                 nbytes = job.size
                 metrics.record("download", start, end, nbytes, ok, err)
@@ -372,27 +429,119 @@ def run_profile(args):
     last_print = 0
     first_frame = True
     download_phase_started = False
+    mixed_phase_started = False
+    key_to_job = {job.path.name: job for job in jobs}
+    
+    def start_read_phase():
+        """Запускает фазу чтения для read-heavy или write-heavy профилей."""
+        nonlocal download_phase_started
+        with uploaded_objects_lock:
+            if uploaded_objects:
+                download_phase_started = True
+                for key, endpoint in uploaded_objects.items():
+                    if key in key_to_job:
+                        job = key_to_job[key]
+                        job.endpoint = endpoint  # Устанавливаем endpoint из словаря
+                        try:
+                            q.put(("download", job), block=False)
+                        except queue.Full:
+                            pass  # Очередь полна, попробуем позже
+                upload_phase_done.set()
+    
+    def start_mixed_phase():
+        """Запускает смешанную фазу для mixed профиля."""
+        nonlocal mixed_phase_started
+        with uploaded_objects_lock:
+            if uploaded_objects:
+                mixed_phase_started = True
+                # Создаём список всех загруженных объектов для смешанных операций
+                uploaded_list = list(uploaded_objects.items())
+                random.shuffle(uploaded_list)
+                for key, endpoint in uploaded_list:
+                    if key in key_to_job:
+                        job = key_to_job[key]
+                        job.endpoint = endpoint
+                        # Решаем, что делать: чтение или запись (с учётом пропорции)
+                        if random.random() < mixed_read_ratio:
+                            try:
+                                q.put(("download", job), block=False)
+                            except queue.Full:
+                                pass
+                        else:
+                            # Для записи создаём новый job из того же файла
+                            try:
+                                q.put(("upload", job), block=False)
+                            except queue.Full:
+                                pass
+                upload_phase_done.set()
+    
+    def manage_burst_pattern():
+        """Управляет паттерном bursty: чередует периоды высокой и низкой нагрузки."""
+        nonlocal burst_active, burst_start_time
+        with pattern_lock:
+            now = time.time()
+            if pattern == "bursty":
+                if not burst_active:
+                    # Начинаем всплеск
+                    burst_active = True
+                    burst_start_time = now
+                elif burst_start_time and (now - burst_start_time) >= burst_duration_sec:
+                    # Заканчиваем всплеск
+                    burst_active = False
+                    burst_start_time = None
+            else:
+                burst_active = False
+    
     try:
         while any(t.is_alive() for t in threads):
             time.sleep(0.5)
             now = time.time()
             
-            # Проверяем, завершены ли все upload операции, и начинаем download
+            # Управление паттерном bursty
+            manage_burst_pattern()
+            
+            # Проверяем, завершены ли все upload операции, и начинаем следующую фазу
             with pending_lock:
                 upload_pending = q.qsize()
             with active_lock:
                 upload_active = active_uploads
-            if not download_phase_started and upload_pending == 0 and upload_active == 0 and args.profile == "write-heavy":
-                with uploaded_keys_lock:
-                    if uploaded_keys:
-                        download_phase_started = True
-                        # Создаём Job объекты для download из загруженных ключей
-                        key_to_job = {job.path.name: job for job in jobs}
-                        for key in uploaded_keys:
+            
+            # Переключение фаз в зависимости от профиля
+            if not download_phase_started and not mixed_phase_started:
+                if upload_pending == 0 and upload_active == 0:
+                    if profile == "write-heavy" or profile == "read-heavy":
+                        start_read_phase()
+                    elif profile == "mixed-70-30":
+                        start_mixed_phase()
+            
+            # Для mixed профиля: добавляем новые задачи в смешанном режиме
+            if mixed_phase_started and profile == "mixed-70-30":
+                with uploaded_objects_lock:
+                    if uploaded_objects and q.qsize() < (queue_limit or 1000):
+                        # Добавляем новые задачи в зависимости от паттерна
+                        intensity = burst_intensity_multiplier if burst_active else 1.0
+                        tasks_to_add = int(args.threads * intensity) if burst_active else 1
+                        uploaded_list = list(uploaded_objects.items())
+                        random.shuffle(uploaded_list)
+                        added = 0
+                        for key, endpoint in uploaded_list:
+                            if added >= tasks_to_add:
+                                break
                             if key in key_to_job:
-                                q.put(("download", key_to_job[key]))
-                        # Устанавливаем флаг только после добавления всех задач
-                        upload_phase_done.set()
+                                job = key_to_job[key]
+                                job.endpoint = endpoint
+                                if random.random() < mixed_read_ratio:
+                                    try:
+                                        q.put(("download", job), block=False)
+                                        added += 1
+                                    except queue.Full:
+                                        break
+                                else:
+                                    try:
+                                        q.put(("upload", job), block=False)
+                                        added += 1
+                                    except queue.Full:
+                                        break
             
             if now - last_print >= 2.0:
                 rbps, wbps, ops_per_sec = metrics.current_rates(5.0)
@@ -423,10 +572,10 @@ def run_profile(args):
                 
                 # ETA: для фазы записи или чтения
                 eta_sec = None
-                if download_phase_started:
-                    # В фазе чтения: считаем ETA по оставшимся файлам для чтения
-                    with uploaded_keys_lock:
-                        total_to_read = len(uploaded_keys)
+                if download_phase_started or mixed_phase_started:
+                    # В фазе чтения или mixed: считаем ETA по оставшимся файлам для чтения
+                    with uploaded_objects_lock:
+                        total_to_read = len(uploaded_objects)
                     files_left_read = max(total_to_read - files_read, 0)
                     if rbps > 1 and files_left_read > 0:
                         # Приблизительная оценка: средний размер файла * оставшиеся файлы / скорость чтения
@@ -441,15 +590,27 @@ def run_profile(args):
                 
                 # Показываем последнюю операцию (upload или download)
                 last_info = "n/a"
-                if download_phase_started:
+                if download_phase_started or mixed_phase_started:
+                    # В mixed фазе показываем последнюю операцию (может быть и read, и write)
                     last_download = metrics.last_download
-                    if last_download:
+                    last_upload = metrics.last_upload
+                    if last_download and last_upload:
+                        # Показываем более свежую операцию
+                        if last_download.get("ended", 0) > last_upload.get("ended", 0):
+                            last_size_mb = last_download["bytes"] / 1024 / 1024
+                            last_dur = last_download["lat_ms"] / 1000
+                            last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
+                        else:
+                            last_size_mb = last_upload["bytes"] / 1024 / 1024
+                            last_dur = last_upload["lat_ms"] / 1000
+                            last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
+                    elif last_download:
                         last_size_mb = last_download["bytes"] / 1024 / 1024
                         last_dur = last_download["lat_ms"] / 1000
                         last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                    elif metrics.last_upload:
-                        last_size_mb = metrics.last_upload["bytes"] / 1024 / 1024
-                        last_dur = metrics.last_upload["lat_ms"] / 1000
+                    elif last_upload:
+                        last_size_mb = last_upload["bytes"] / 1024 / 1024
+                        last_dur = last_upload["lat_ms"] / 1000
                         last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
                 else:
                     last_upload = metrics.last_upload
@@ -469,17 +630,21 @@ def run_profile(args):
                     lat_line = " | ".join(parts)
                 plain_lines: list[str] = []
                 styled_lines: list[tuple[str, tuple[str, ...], bool]] = []
-                header = f"S3Flood | t={elapsed:6.1f}s | ETA {eta_str}"
+                pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
+                header = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}"
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
-                # Для фазы чтения: учитываем активные операции и pending
-                if download_phase_started:
-                    with uploaded_keys_lock:
-                        total_to_read = len(uploaded_keys)
+                # Для фазы чтения или mixed: учитываем активные операции и pending
+                if download_phase_started or mixed_phase_started:
+                    with uploaded_objects_lock:
+                        total_to_read = len(uploaded_objects)
                     files_in_progress_read = files_read + active_downloads_snap
                     read_pct = (files_in_progress_read / total_to_read * 100) if total_to_read > 0 else 0.0
-                    phase_info = " [READ]"
-                    # В фазе чтения: подсвечиваем данные чтения (R:) зелёным, W: без стилей
+                    if mixed_phase_started:
+                        phase_info = " [MIXED]"
+                    else:
+                        phase_info = " [READ]"
+                    # В фазе чтения/mixed: подсвечиваем данные чтения (R:) зелёным, W: без стилей
                     # Разделяем на части для цветового выделения
                     w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
                     r_part = f"R:{files_read}/{total_to_read} ({read_pct:.1f}%)"
@@ -510,12 +675,16 @@ def run_profile(args):
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
                 
                 # Цветовое выделение для rates
-                if download_phase_started:
-                    # В фазе чтения: подсвечиваем R: зелёным, W: без стилей
+                if download_phase_started or mixed_phase_started:
+                    # В фазе чтения/mixed: подсвечиваем R: зелёным, W: без стилей (или оба, если mixed)
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
                     r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
                     rate_line_plain = f"Rates {w_rates_part} | {r_rates_part} | last {last_info}"
-                    rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                    if mixed_phase_started:
+                        # В mixed фазе подсвечиваем оба
+                        rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_CYAN)}"
+                    else:
+                        rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
                 else:
                     # В фазе записи: подсвечиваем W: зелёным, R: без стилей
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
@@ -527,14 +696,17 @@ def run_profile(args):
                 
                 # Цветовое выделение для latency
                 if lat_line != "n/a":
-                    if download_phase_started:
-                        # В фазе чтения: подсвечиваем R: зелёным, W: без стилей
+                    if download_phase_started or mixed_phase_started:
+                        # В фазе чтения/mixed: подсвечиваем R: зелёным, W: без стилей (или оба, если mixed)
                         if "W:" in lat_line and "R:" in lat_line:
                             parts = lat_line.split(" | ")
                             w_lat_part = parts[0] if parts[0].startswith("W:") else ""
                             r_lat_part = parts[1] if len(parts) > 1 and parts[1].startswith("R:") else ""
                             if w_lat_part and r_lat_part:
-                                latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
+                                if mixed_phase_started:
+                                    latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
+                                else:
+                                    latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                             elif r_lat_part:
                                 latency_line_styled = f"Latency {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                             else:

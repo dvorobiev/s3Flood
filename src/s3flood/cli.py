@@ -32,6 +32,13 @@ def main():
     runp.add_argument("--report", default=None)
     runp.add_argument("--metrics", default=None)
     runp.add_argument("--data-dir", dest="data_dir", default=None, help="Путь к корню датасета (сканируется рекурсивно)")
+    runp.add_argument("--mixed-read-ratio", type=float, dest="mixed_read_ratio", default=None, help="Доля операций чтения для mixed профиля (0.0-1.0)")
+    runp.add_argument("--pattern", choices=["sustained","bursty"], default=None, help="Паттерн нагрузки: sustained (ровная) или bursty (всплески)")
+    runp.add_argument("--burst-duration-sec", type=float, dest="burst_duration_sec", default=None, help="Длительность всплеска в секундах для bursty паттерна")
+    runp.add_argument("--burst-intensity-multiplier", type=float, dest="burst_intensity_multiplier", default=None, help="Множитель интенсивности для bursty паттерна")
+    runp.add_argument("--queue-limit", type=int, dest="queue_limit", default=None, help="Максимальный размер очереди операций")
+    runp.add_argument("--max-retries", type=int, dest="max_retries", default=None, help="Максимальное количество повторов при ошибке")
+    runp.add_argument("--retry-backoff-base", type=float, dest="retry_backoff_base", default=None, help="Базовый множитель для экспоненциального backoff")
 
     args = parser.parse_args()
 
