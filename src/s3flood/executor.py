@@ -131,48 +131,14 @@ class Metrics:
 
     def finalize(self):
         dur = max(time.time() - self._start, 1e-6)
-        
-        # Вычисляем реальное время выполнения для каждой фазы
-        # Для последовательных фаз (write-heavy, read-heavy) вычисляем время каждой фазы отдельно
-        # Для смешанных фаз (mixed) операции могут идти параллельно, используем общее время
-        write_duration = 0.0
-        read_duration = 0.0
-        
-        if self.ops:
-            # Находим первое и последнее время для каждой операции (только успешные)
-            write_ops = [op for op in self.ops if op[0] == "upload" and op[4]]  # op, start, end, nbytes, ok, lat_ms
-            read_ops = [op for op in self.ops if op[0] == "download" and op[4]]
-            
-            if write_ops:
-                write_start = min(op[1] for op in write_ops)  # start time
-                write_end = max(op[2] for op in write_ops)    # end time
-                write_duration = max(write_end - write_start, 1e-6)
-            
-            if read_ops:
-                read_start = min(op[1] for op in read_ops)    # start time
-                read_end = max(op[2] for op in read_ops)      # end time
-                read_duration = max(read_end - read_start, 1e-6)
-        
-        # Если не удалось вычислить по операциям, используем общее время
-        if write_duration == 0.0 and self.write_bytes > 0:
-            write_duration = dur
-        if read_duration == 0.0 and self.read_bytes > 0:
-            read_duration = dur
-        
-        # Вычисляем средние скорости на основе реального времени каждой фазы
-        write_MBps_avg = (self.write_bytes / 1024 / 1024 / write_duration) if write_duration > 0 else 0.0
-        read_MBps_avg = (self.read_bytes / 1024 / 1024 / read_duration) if read_duration > 0 else 0.0
-        
         out = {
             "duration_sec": dur,
             "write_bytes": self.write_bytes,
             "read_bytes": self.read_bytes,
-            "write_duration_sec": write_duration,
-            "read_duration_sec": read_duration,
-            "read_MBps_avg": read_MBps_avg,
-            "write_MBps_avg": write_MBps_avg,
+            "read_MBps_avg": self.read_bytes/1024/1024/dur,
+            "write_MBps_avg": self.write_bytes/1024/1024/dur,
             "read_ok_ops": self.read_ops_ok,
-            "write_ok_ops": self.write_ok_ops,
+            "write_ok_ops": self.write_ops_ok,
             "err_ops": self.err_ops,
         }
         with open(self.json_path, "w") as f:
