@@ -1,0 +1,16 @@
+run:
+  profile: write-heavy
+  client: awscli
+  endpoint: "http://127.0.0.1:9000"
+  bucket: s3flood-test
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  threads: 4
+  data_dir: "./loadset/data"
+  report: "out-minio.json"
+  metrics: "out-minio.csv"
+  mixed_read_ratio: 0.7
+  pattern: sustained
+  queue_limit: 200
+  max_retries: 2
+  retry_backoff_base: 2.0

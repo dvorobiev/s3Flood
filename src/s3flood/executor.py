@@ -251,14 +251,34 @@ def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwa
     for attempt in range(max_retries + 1):
         try:
             result = func(*args, **kwargs)
-            if hasattr(result, 'returncode') and result.returncode == 0:
+            # Проверяем успешность операции
+            if result is None:
+                last_error = "function returned None"
+                if attempt < max_retries:
+                    wait_time = backoff_base ** attempt
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return None, False, last_error
+            # Проверяем наличие атрибута returncode
+            if not hasattr(result, 'returncode'):
+                last_error = f"result has no returncode attribute, type: {type(result)}"
+                if attempt < max_retries:
+                    wait_time = backoff_base ** attempt
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    return result, False, last_error
+            # Если returncode == 0, операция успешна
+            if result.returncode == 0:
                 return result, True, None
+            # Если returncode != 0, это ошибка
             elif attempt < max_retries:
                 wait_time = backoff_base ** attempt
                 time.sleep(wait_time)
-                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else "unknown"
+                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else f"exit code {result.returncode}"
             else:
-                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else "unknown"
+                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else f"exit code {result.returncode}"
                 return result, False, last_error
         except Exception as e:
             if attempt < max_retries:
@@ -448,23 +468,34 @@ def run_profile(args):
                     getattr(args, "aws_profile", None),
                 )
                 end = time.time()
-                # Если операция не успешна, формируем детальное сообщение об ошибке
+                # Детальная диагностика для отладки
                 if not ok:
+                    debug_info = []
                     if res is None:
+                        debug_info.append("res=None")
                         err = err or "retry failed: no result"
-                    elif hasattr(res, 'returncode'):
-                        err_parts = []
-                        if res.returncode != 0:
-                            err_parts.append(f"exit_code={res.returncode}")
-                        if hasattr(res, 'stderr') and res.stderr:
-                            stderr_snippet = res.stderr[-300:] if len(res.stderr) > 300 else res.stderr
-                            err_parts.append(f"stderr={stderr_snippet}")
-                        if hasattr(res, 'stdout') and res.stdout:
-                            stdout_snippet = res.stdout[-200:] if len(res.stdout) > 200 else res.stdout
-                            err_parts.append(f"stdout={stdout_snippet}")
-                        err = err or ("; ".join(err_parts) if err_parts else "unknown error")
                     else:
-                        err = err or f"unexpected result type: {type(res)}"
+                        debug_info.append(f"res_type={type(res)}")
+                        if hasattr(res, 'returncode'):
+                            debug_info.append(f"returncode={res.returncode}")
+                            if res.returncode != 0:
+                                err_parts = [f"exit_code={res.returncode}"]
+                                if hasattr(res, 'stderr') and res.stderr:
+                                    stderr_snippet = res.stderr[-300:] if len(res.stderr) > 300 else res.stderr
+                                    err_parts.append(f"stderr={stderr_snippet}")
+                                    debug_info.append(f"stderr_len={len(res.stderr)}")
+                                if hasattr(res, 'stdout') and res.stdout:
+                                    stdout_snippet = res.stdout[-200:] if len(res.stdout) > 200 else res.stdout
+                                    err_parts.append(f"stdout={stdout_snippet}")
+                                    debug_info.append(f"stdout_len={len(res.stdout)}")
+                                err = err or ("; ".join(err_parts) if err_parts else "unknown error")
+                            else:
+                                # returncode == 0, но ok == False - это странно, логируем
+                                debug_info.append("WARNING: returncode=0 but ok=False")
+                                err = err or f"unexpected: returncode=0 but marked as failed; debug: {'; '.join(debug_info)}"
+                        else:
+                            debug_info.append("no returncode attribute")
+                            err = err or f"unexpected result type: {type(res)}; debug: {'; '.join(debug_info)}"
                 # Пытаемся извлечь реальный размер объекта из ответа s3api get-object
                 nbytes = job.size  # По умолчанию используем размер исходного файла
                 if ok and res and hasattr(res, 'stdout') and res.stdout:
