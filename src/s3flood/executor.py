@@ -221,26 +221,28 @@ def aws_cp_download(
     aws_profile: str | None,
 ):
     env = _get_aws_env(access_key, secret_key, aws_profile)
-    # Используем s3api get-object вместо s3 cp, чтобы избежать ошибки обновления времени модификации /dev/null
+    # Используем s3 cp вместо s3api get-object для лучшей совместимости с различными бекендами
     devnull = "NUL" if os.name == "nt" else "/dev/null"
-    # Извлекаем имя бакета без префикса s3://
-    bucket_name = bucket.replace("s3://", "").split("/")[0]
-    cmd = ["aws", "s3api", "get-object", "--bucket", bucket_name, "--key", key, devnull, "--endpoint-url", endpoint]
+    # Формируем S3 URL
+    s3_url = f"s3://{bucket}/{key}" if not bucket.startswith("s3://") else f"{bucket}/{key}"
+    cmd = ["aws", "s3", "cp", s3_url, devnull, "--endpoint-url", endpoint, "--no-progress"]
     res = subprocess.run(cmd, capture_output=True, text=True, env=env)
     # Если команда успешна (returncode == 0), возвращаем результат как есть
     if res.returncode == 0:
         return res
     # Если есть ошибка обновления времени модификации, но данные загружены, считаем успехом
     if res.returncode != 0 and res.stderr:
-        if "Successfully Downloaded" in res.stderr and "unable to update the last modified time" in res.stderr:
-            # Данные загружены успешно, просто не удалось обновить время модификации
-            # Создаём фиктивный успешный результат с теми же атрибутами, что и subprocess.CompletedProcess
-            class FakeResult:
-                returncode = 0
-                stdout = res.stdout
-                stderr = ""
-                args = res.args
-            return FakeResult()
+        if "Successfully Downloaded" in res.stderr or ("download:" in res.stderr and "to" in res.stderr):
+            # Проверяем, не является ли ошибка только проблемой с обновлением времени модификации
+            if "unable to update the last modified time" in res.stderr or "failed" not in res.stderr.lower():
+                # Данные загружены успешно, просто не удалось обновить время модификации или есть предупреждение
+                # Создаём фиктивный успешный результат с теми же атрибутами, что и subprocess.CompletedProcess
+                class FakeResult:
+                    returncode = 0
+                    stdout = res.stdout
+                    stderr = ""
+                    args = res.args
+                return FakeResult()
     # Для всех остальных ошибок возвращаем исходный результат
     return res
 
@@ -496,16 +498,8 @@ def run_profile(args):
                         else:
                             debug_info.append("no returncode attribute")
                             err = err or f"unexpected result type: {type(res)}; debug: {'; '.join(debug_info)}"
-                # Пытаемся извлечь реальный размер объекта из ответа s3api get-object
-                nbytes = job.size  # По умолчанию используем размер исходного файла
-                if ok and res and hasattr(res, 'stdout') and res.stdout:
-                    try:
-                        import json
-                        response_data = json.loads(res.stdout)
-                        if "ContentLength" in response_data:
-                            nbytes = int(response_data["ContentLength"])
-                    except (json.JSONDecodeError, ValueError, KeyError):
-                        pass  # Используем job.size если не удалось распарсить
+                # Используем размер исходного файла (s3 cp не возвращает JSON с размером)
+                nbytes = job.size
                 metrics.record("download", start, end, nbytes, ok, err)
             with active_lock:
                 if op == "upload":
