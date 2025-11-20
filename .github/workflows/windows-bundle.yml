@@ -2,9 +2,16 @@ name: windows-bundle
 
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
   push:
     tags:
       - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -44,12 +51,16 @@ jobs:
           name: s3flood-windows
           path: s3flood-windows.zip
 
-      - name: Create Release
+      - name: Attach Windows bundle to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
           files: s3flood-windows.zip
-          generate_release_notes: true
+          # Не создаём новый релиз, только прикрепляем файлы к существующему
+          # Если релиз не существует, он будет создан автоматически
           draft: false
           prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
