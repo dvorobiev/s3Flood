@@ -5,15 +5,27 @@ from dataclasses import dataclass
 
 # Minimal executor with AWS CLI runner only (v1)
 
-ANSI_RESET = "\x1b[0m"
-ANSI_BOLD = "\x1b[1m"
-ANSI_DIM = "\x1b[2m"
-ANSI_RED = "\x1b[31m"
-ANSI_GREEN = "\x1b[32m"
-ANSI_YELLOW = "\x1b[33m"
-ANSI_BLUE = "\x1b[34m"
-ANSI_MAGENTA = "\x1b[35m"
-ANSI_CYAN = "\x1b[36m"
+# Определяем, поддерживает ли терминал ANSI цвета
+# На Windows проверяем переменные окружения и версию терминала
+USE_COLORS = True
+if os.name == "nt":  # Windows
+    # Проверяем переменную NO_COLOR
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        USE_COLORS = False
+    else:
+        # Windows 10+ поддерживает ANSI, но нужно проверить
+        # Для простоты отключаем цвета на Windows, если явно не включено
+        USE_COLORS = os.environ.get("FORCE_COLOR", "").lower() in ("1", "true", "yes")
+
+ANSI_RESET = "\x1b[0m" if USE_COLORS else ""
+ANSI_BOLD = "\x1b[1m" if USE_COLORS else ""
+ANSI_DIM = "\x1b[2m" if USE_COLORS else ""
+ANSI_RED = "\x1b[31m" if USE_COLORS else ""
+ANSI_GREEN = "\x1b[32m" if USE_COLORS else ""
+ANSI_YELLOW = "\x1b[33m" if USE_COLORS else ""
+ANSI_BLUE = "\x1b[34m" if USE_COLORS else ""
+ANSI_MAGENTA = "\x1b[35m" if USE_COLORS else ""
+ANSI_CYAN = "\x1b[36m" if USE_COLORS else ""
 
 ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -23,6 +35,8 @@ def visible_len(s: str) -> int:
 
 
 def style(text: str, *codes: str) -> str:
+    if not USE_COLORS:
+        return text
     prefix = "".join(codes)
     return f"{prefix}{text}{ANSI_RESET}" if codes else text
 
@@ -888,9 +902,14 @@ def run_profile(args):
                 if first_frame:
                     first_frame = False
                 else:
-                    sys.stdout.write(f"\x1b[{table_height}A")
+                    if USE_COLORS:
+                        sys.stdout.write(f"\x1b[{table_height}A")
+                    else:
+                        # На Windows без поддержки ANSI просто выводим разделитель
+                        sys.stdout.write("\n" + "=" * 100 + "\n")
                 for line in render_lines:
-                    sys.stdout.write("\x1b[2K")
+                    if USE_COLORS:
+                        sys.stdout.write("\x1b[2K")
                     sys.stdout.write(line + "\n")
                 sys.stdout.flush()
                 last_print = now
