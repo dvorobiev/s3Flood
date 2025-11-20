@@ -183,6 +183,11 @@ class Metrics:
 def _get_aws_env(access_key: str | None, secret_key: str | None, aws_profile: str | None) -> dict:
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
+    # Отключаем автоматические checksums для совместимости с S3-совместимыми бекендами
+    # (начиная с boto3 1.36.0 checksums включены по умолчанию, что может вызывать BadDigest)
+    env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
+    # Устанавливаем высокий порог multipart, чтобы избежать multipart upload для большинства файлов
+    env["AWS_CLI_FILE_TRANSFER_CONFIG"] = '{"multipart_threshold": 5368709120}'
     if aws_profile:
         env["AWS_PROFILE"] = aws_profile
         env.pop("AWS_ACCESS_KEY_ID", None)
@@ -207,6 +212,17 @@ def aws_cp_upload(
     aws_profile: str | None,
 ):
     env = _get_aws_env(access_key, secret_key, aws_profile)
+    try:
+        size_bytes = local.stat().st_size
+    except OSError:
+        size_bytes = 0
+    single_put_limit = 5 * 1024 * 1024 * 1024  # 5 GB — предел одного put-object
+    # Для файлов < 5GB используем s3api put-object (гарантирует одиночный PUT без multipart и checksums)
+    if size_bytes and size_bytes < single_put_limit:
+        bucket_name = bucket.replace("s3://", "").split("/")[0]
+        cmd = ["aws", "s3api", "put-object", "--bucket", bucket_name, "--key", key, "--body", str(local), "--endpoint-url", endpoint]
+        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # Для файлов >= 5GB используем s3 cp (с отключенными checksums через переменные окружения)
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
