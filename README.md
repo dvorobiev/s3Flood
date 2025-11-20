@@ -37,7 +37,7 @@ cd s3Flood
 #### Ручная установка
 
 Требования:
-- Python 3.10+ 
+- Python 3.10+
 - AWS CLI в `PATH`
 
 ```bash
@@ -45,6 +45,47 @@ python3 -m venv .venv
 source .venv/bin/activate  # На Windows: .venv\Scripts\activate
 pip install -e .
 ```
+
+#### Windows без доступа к интернету
+
+Если целевая машина офлайн, выполните подготовку на компьютере с интернетом (macOS/Linux/Windows):
+
+1. **Соберите колёса зависимостей и самого проекта**:
+   ```bash
+   cd s3Flood
+   python3 -m venv .venv && source .venv/bin/activate
+   pip install --upgrade pip wheel
+   pip download --only-binary=:all: --platform win_amd64 --python-version 311 --dest wheels -r requirements.txt
+   pip download --only-binary=:all: --platform win_amd64 --python-version 311 --dest wheels .
+   ```
+   В папке `wheels/` будут все нужные `.whl` файлы (включая `s3flood-*.whl`).
+
+2. **Скопируйте на офлайн Windows**:
+   - Каталог `s3Flood/` (исходники, конфиги).
+   - Папку `wheels/`.
+   - Установщики `python-3.11.x-amd64.exe`, `AWSCLIV2.msi`.
+
+3. **На офлайн Windows**:
+   ```powershell
+   # установить Python и AWS CLI (installer'ы запускать от администратора)
+
+   cd C:\path\to\s3Flood
+   py -3.11 -m venv .venv
+   .\.venv\Scripts\Activate
+
+   pip install --no-index --find-links .\wheels s3flood==0.3.0
+   ```
+   После этого доступны `python -m s3flood ...` и `aws ...`.
+
+4. **Если нужен датасет** — создайте его прямо на Windows без `--use-symlinks`:
+   ```powershell
+   python -m s3flood dataset-create --path .\loadset --target-bytes 5GB
+   ```
+
+5. **Готовый ZIP для Windows**. Workflow `windows-bundle` автоматически собирает `s3flood.exe` + `config.sample.yaml` + README и публикует архив `s3flood-windows.zip` в релизах GitHub. На офлайн машине достаточно:
+   - установить AWS CLI;
+   - распаковать архив из релиза;
+   - запускать `.\s3flood.exe run --config config.yaml`.
 
 ### CLI
 
