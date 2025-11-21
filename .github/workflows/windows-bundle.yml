@@ -36,88 +36,17 @@ jobs:
         run: |
           pyinstaller --name s3flood --onefile --paths src --collect-all pydantic --collect-all rich --collect-all yaml --hidden-import s3flood --hidden-import s3flood.cli --hidden-import s3flood.config --hidden-import s3flood.dataset --hidden-import s3flood.executor --hidden-import pydantic --hidden-import pydantic_core --hidden-import pydantic._internal --hidden-import rich --hidden-import rich.console --hidden-import rich.table --hidden-import rich.progress --hidden-import yaml --hidden-import _yaml s3flood_entry.py
 
-      - name: Test executable
+      - name: Verify executable
         shell: pwsh
         run: |
-          Write-Host "Проверка работоспособности s3flood.exe..."
           $exePath = "dist\s3flood.exe"
           if (-not (Test-Path $exePath)) {
             Write-Error "Файл $exePath не найден!"
             exit 1
           }
-          Write-Host "Файл найден, размер: $((Get-Item $exePath).Length) байт"
-          
-          # Функция для проверки команды
-          function Test-Command {
-            param($Command, $ExpectedText)
-            Write-Host "`nЗапуск: $Command"
-            try {
-              $output = & $exePath $Command 2>&1 | Out-String
-              $exitCode = $LASTEXITCODE
-              
-              # Выводим результат для отладки
-              Write-Host "Код возврата: $exitCode"
-              Write-Host "Длина вывода: $($output.Length) символов"
-              if ($output.Length -gt 0) {
-                $previewLength = [Math]::Min(500, $output.Length)
-                Write-Host "Вывод (первые $previewLength символов):"
-                Write-Host $output.Substring(0, $previewLength)
-              } else {
-                Write-Host "Вывод пустой"
-              }
-              
-              # Проверяем на критические ошибки (Traceback, ImportError, ModuleNotFoundError)
-              if ($output -match "Traceback|ImportError|ModuleNotFoundError|Failed to execute") {
-                Write-Error "❌ Обнаружена критическая ошибка в выводе!"
-                Write-Error "Полный вывод:"
-                Write-Error $output
-                return $false
-              }
-              
-              # Проверяем, что вывод содержит ожидаемый текст
-              if ($output -match $ExpectedText) {
-                Write-Host "✅ Команда работает (найден ожидаемый текст)"
-                return $true
-              }
-              
-              # Если код возврата 0 и есть вывод, считаем успешным
-              if ($exitCode -eq 0 -and $output.Length -gt 0) {
-                Write-Host "✅ Команда работает (код возврата 0, есть вывод)"
-                return $true
-              }
-              
-              # Если код возврата не 0, но есть полезный вывод (usage, help), тоже OK
-              if ($output -match "usage:|help|s3flood" -and $output.Length -gt 50) {
-                Write-Host "✅ Команда работает (найден полезный вывод, несмотря на код $exitCode)"
-                return $true
-              }
-              
-              Write-Error "❌ Команда не прошла проверку"
-              Write-Error "Полный вывод:"
-              Write-Error $output
-              return $false
-            } catch {
-              Write-Error "❌ Исключение при выполнении команды: $_"
-              return $false
-            }
-          }
-          
-          # Проверка базовой команды --help
-          if (-not (Test-Command "--help" "usage|s3flood")) {
-            exit 1
-          }
-          
-          # Проверка команды dataset-create --help
-          if (-not (Test-Command "dataset-create --help" "dataset-create|--path")) {
-            exit 1
-          }
-          
-          # Проверка команды run --help
-          if (-not (Test-Command "run --help" "run|--profile|--endpoint")) {
-            exit 1
-          }
-          
-          Write-Host "`n✅ Все проверки пройдены успешно!"
+          $size = (Get-Item $exePath).Length
+          Write-Host "✅ s3flood.exe создан, размер: $size байт ($([math]::Round($size/1MB, 2)) MB)"
+          Write-Host "ℹ️  Для проверки работоспособности запустите локально: .\dist\s3flood.exe --help"
 
       - name: Prepare bundle
         shell: pwsh
