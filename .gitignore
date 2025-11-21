@@ -17,6 +17,10 @@ metrics.csv
 real-*.csv
 real-*.json
 
+# Windows portable build artifacts
+windows-portable-build/
+s3flood-windows-portable-*.zip
+
 # Local configs (не коммитим реальные креденшлы)
 config.local.yaml
 *.local.yaml
