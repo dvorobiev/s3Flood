@@ -229,8 +229,11 @@ push_branch_without_ci() {
         fi
     fi
     
-    # Очистка выполняется через trap cleanup
-    # Но можно явно удалить неотслеживаемые файлы здесь
+    # Удаляем временную ветку после отправки
+    git checkout "$ORIGINAL_BRANCH_SAVED" >/dev/null 2>&1 || git checkout main >/dev/null 2>&1 || true
+    git branch -D "$TEMP_BRANCH" >/dev/null 2>&1 || true
+    
+    # Очистка неотслеживаемых файлов
     rm -rf .github/ 2>/dev/null || true
     
     if [ "$PUSH_SUCCESS" = false ]; then
