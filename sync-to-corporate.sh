@@ -13,6 +13,33 @@
 
 set -e
 
+# Функция для гарантированной очистки при выходе
+cleanup() {
+    local exit_code=$?
+    # Удаляем неотслеживаемые файлы .github/
+    rm -rf .github/ 2>/dev/null || true
+    
+    # Возвращаемся на исходную ветку
+    if [ -n "$ORIGINAL_BRANCH_SAVED" ]; then
+        git checkout "$ORIGINAL_BRANCH_SAVED" >/dev/null 2>&1 || git checkout main >/dev/null 2>&1 || true
+    else
+        git checkout main >/dev/null 2>&1 || true
+    fi
+    
+    # Удаляем временную ветку если она существует
+    if [ -n "$TEMP_BRANCH" ]; then
+        git branch -D "$TEMP_BRANCH" 2>/dev/null || true
+    fi
+    
+    # Удаляем временные файлы
+    rm -f /tmp/git_push_output_*.txt 2>/dev/null || true
+    
+    exit $exit_code
+}
+
+# Регистрируем trap для очистки при любом выходе
+trap cleanup EXIT INT TERM
+
 CORPORATE_REMOTE="corporate"
 # URL по умолчанию (можно переопределить через переменную окружения или аргумент)
 DEFAULT_URL="https://git.archive.systems/dvorobiev/s3Flood.git"
@@ -118,33 +145,53 @@ push_branch_without_ci() {
     PUSH_SUCCESS=false
     PUSH_OUTPUT=""
     PUSH_TIMEOUT=30  # Таймаут 30 секунд
+    PUSH_OUTPUT_FILE="/tmp/git_push_output_$$.txt"
     
     echo "    ⏳ Отправка ветки $branch (таймаут ${PUSH_TIMEOUT}с)..."
     
-    if [ "$FORCE_PUSH" = true ]; then
-        # Используем timeout для предотвращения зависания
-        if command -v timeout >/dev/null 2>&1; then
-            PUSH_OUTPUT=$(timeout $PUSH_TIMEOUT git push "$CORPORATE_REMOTE" "$TEMP_BRANCH:$target_ref" --force 2>&1)
-            PUSH_EXIT=$?
-        elif command -v gtimeout >/dev/null 2>&1; then
-            PUSH_OUTPUT=$(gtimeout $PUSH_TIMEOUT git push "$CORPORATE_REMOTE" "$TEMP_BRANCH:$target_ref" --force 2>&1)
-            PUSH_EXIT=$?
-        else
-            # Fallback: запускаем в фоне и убиваем через таймаут
-            (git push "$CORPORATE_REMOTE" "$TEMP_BRANCH:$target_ref" --force > /tmp/git_push_output_$$.txt 2>&1) &
-            PUSH_PID=$!
-            sleep $PUSH_TIMEOUT
-            if kill -0 $PUSH_PID 2>/dev/null; then
-                kill $PUSH_PID 2>/dev/null
-                PUSH_OUTPUT="Timeout: push занял больше ${PUSH_TIMEOUT} секунд"
-                PUSH_EXIT=1
-            else
-                wait $PUSH_PID
-                PUSH_EXIT=$?
-                PUSH_OUTPUT=$(cat /tmp/git_push_output_$$.txt 2>/dev/null || echo "")
-                rm -f /tmp/git_push_output_$$.txt
+    # Функция для push с таймаутом (работает на macOS и Linux)
+    push_with_timeout() {
+        local push_cmd="$1"
+        local output_file="$2"
+        local timeout_sec="$3"
+        
+        # Запускаем push в фоне
+        eval "$push_cmd" > "$output_file" 2>&1 &
+        local push_pid=$!
+        
+        # Ждём завершения или таймаута
+        local elapsed=0
+        while [ $elapsed -lt $timeout_sec ]; do
+            if ! kill -0 $push_pid 2>/dev/null; then
+                # Процесс завершился
+                wait $push_pid
+                return $?
             fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+        done
+        
+        # Таймаут - убиваем процесс
+        if kill -0 $push_pid 2>/dev/null; then
+            kill $push_pid 2>/dev/null || true
+            wait $push_pid 2>/dev/null || true
+            echo "Timeout: push занял больше ${timeout_sec} секунд" >> "$output_file"
+            return 1
         fi
+        
+        wait $push_pid
+        return $?
+    }
+    
+    if [ "$FORCE_PUSH" = true ]; then
+        push_cmd="git push \"$CORPORATE_REMOTE\" \"$TEMP_BRANCH:$target_ref\" --force"
+        if push_with_timeout "$push_cmd" "$PUSH_OUTPUT_FILE" "$PUSH_TIMEOUT"; then
+            PUSH_EXIT=0
+        else
+            PUSH_EXIT=1
+        fi
+        PUSH_OUTPUT=$(cat "$PUSH_OUTPUT_FILE" 2>/dev/null || echo "")
+        rm -f "$PUSH_OUTPUT_FILE"
         
         if [ $PUSH_EXIT -eq 0 ]; then
             PUSH_SUCCESS=true
@@ -154,28 +201,14 @@ push_branch_without_ci() {
             echo "$PUSH_OUTPUT" | grep -E "(error|fatal|rejected|Timeout)" | head -3 | sed 's/^/    /'
         fi
     else
-        # Аналогично для обычного push
-        if command -v timeout >/dev/null 2>&1; then
-            PUSH_OUTPUT=$(timeout $PUSH_TIMEOUT git push "$CORPORATE_REMOTE" "$TEMP_BRANCH:$target_ref" 2>&1)
-            PUSH_EXIT=$?
-        elif command -v gtimeout >/dev/null 2>&1; then
-            PUSH_OUTPUT=$(gtimeout $PUSH_TIMEOUT git push "$CORPORATE_REMOTE" "$TEMP_BRANCH:$target_ref" 2>&1)
-            PUSH_EXIT=$?
+        push_cmd="git push \"$CORPORATE_REMOTE\" \"$TEMP_BRANCH:$target_ref\""
+        if push_with_timeout "$push_cmd" "$PUSH_OUTPUT_FILE" "$PUSH_TIMEOUT"; then
+            PUSH_EXIT=0
         else
-            (git push "$CORPORATE_REMOTE" "$TEMP_BRANCH:$target_ref" > /tmp/git_push_output_$$.txt 2>&1) &
-            PUSH_PID=$!
-            sleep $PUSH_TIMEOUT
-            if kill -0 $PUSH_PID 2>/dev/null; then
-                kill $PUSH_PID 2>/dev/null
-                PUSH_OUTPUT="Timeout: push занял больше ${PUSH_TIMEOUT} секунд"
-                PUSH_EXIT=1
-            else
-                wait $PUSH_PID
-                PUSH_EXIT=$?
-                PUSH_OUTPUT=$(cat /tmp/git_push_output_$$.txt 2>/dev/null || echo "")
-                rm -f /tmp/git_push_output_$$.txt
-            fi
+            PUSH_EXIT=1
         fi
+        PUSH_OUTPUT=$(cat "$PUSH_OUTPUT_FILE" 2>/dev/null || echo "")
+        rm -f "$PUSH_OUTPUT_FILE"
         
         if [ $PUSH_EXIT -eq 0 ]; then
             PUSH_SUCCESS=true
@@ -196,23 +229,8 @@ push_branch_without_ci() {
         fi
     fi
     
-    # ВСЕГДА возвращаемся на исходную ветку и удаляем временную
-    # Удаляем неотслеживаемые файлы .github/ перед переключением
-    rm -rf .github/ 2>/dev/null || true
-    
-    # Принудительно возвращаемся на исходную ветку
-    if ! git checkout "$ORIGINAL_BRANCH_SAVED" >/dev/null 2>&1; then
-        if ! git checkout main >/dev/null 2>&1; then
-            # Если не получается переключиться, создаём main из origin/main
-            git fetch origin main:main 2>/dev/null || true
-            git checkout main >/dev/null 2>&1 || true
-        fi
-    fi
-    
-    # Удаляем временную ветку
-    git branch -D "$TEMP_BRANCH" 2>/dev/null || true
-    
-    # Дополнительная очистка неотслеживаемых файлов
+    # Очистка выполняется через trap cleanup
+    # Но можно явно удалить неотслеживаемые файлы здесь
     rm -rf .github/ 2>/dev/null || true
     
     if [ "$PUSH_SUCCESS" = false ]; then
