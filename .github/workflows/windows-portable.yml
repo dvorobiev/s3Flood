@@ -62,11 +62,8 @@ jobs:
           Copy-Item python*.dll venv\Scripts\ -ErrorAction SilentlyContinue
           
           # Создаём активационный скрипт
-          @"
-@echo off
-set "VIRTUAL_ENV=%~dp0.."
-set "PATH=%VIRTUAL_ENV%\Scripts;%PATH%"
-"@ | Out-File -FilePath "venv\Scripts\activate.bat" -Encoding ASCII
+          $activateContent = "@echo off`nset `"VIRTUAL_ENV=%~dp0..`"`nset `"PATH=%VIRTUAL_ENV%\Scripts;%PATH%`""
+          $activateContent | Out-File -FilePath "venv\Scripts\activate.bat" -Encoding ASCII
           
           # Устанавливаем зависимости через pip
           python.exe -m pip install --target=venv\Lib\site-packages pydantic rich pyyaml --no-warn-script-location
@@ -92,20 +89,11 @@ set "PATH=%VIRTUAL_ENV%\Scripts;%PATH%"
           cd dist-portable
           
           # s3flood.bat - основной скрипт
-          @"
-@echo off
-setlocal
-
-REM Определяем директорию скрипта
-set "SCRIPT_DIR=%~dp0"
-cd /d "%SCRIPT_DIR%"
-
-REM Запускаем через Python embedded
-python.exe -m s3flood %*
-"@ | Out-File -FilePath "s3flood.bat" -Encoding ASCII
+          $batContent = "@echo off`nsetlocal`n`nREM Определяем директорию скрипта`nset `"SCRIPT_DIR=%~dp0`"`ncd /d `"%SCRIPT_DIR%`"`n`nREM Запускаем через Python embedded`npython.exe -m s3flood %*"
+          $batContent | Out-File -FilePath "s3flood.bat" -Encoding ASCII
           
           # Создаём инструкцию
-          @"
+          $installContent = @"
 s3flood Portable для Windows
 ============================
 
@@ -127,7 +115,8 @@ s3flood Portable для Windows
 - AWS CLI должен быть установлен отдельно
 
 Примечание: Python embedded включён в этот дистрибутив, дополнительная установка не требуется.
-"@ | Out-File -FilePath "INSTALL.txt" -Encoding UTF8
+"@
+          $installContent | Out-File -FilePath "INSTALL.txt" -Encoding UTF8
 
       - name: Create ZIP archive
         shell: pwsh
