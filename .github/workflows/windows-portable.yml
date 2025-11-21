@@ -1,0 +1,153 @@
+name: windows-portable
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-portable:
+    runs-on: ubuntu-latest  # Используем Linux для простоты, можно переделать на windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Download Python embedded
+        run: |
+          PYTHON_VERSION="3.11.9"
+          PYTHON_EMBED_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip"
+          mkdir -p dist-portable
+          curl -L -o dist-portable/python-embed.zip "$PYTHON_EMBED_URL"
+
+      - name: Prepare portable distribution
+        run: |
+          cd dist-portable
+          
+          # Распаковываем Python embedded
+          unzip -q python-embed.zip
+          rm python-embed.zip
+          
+          # Скачиваем и устанавливаем pip
+          curl -L -o get-pip.py https://bootstrap.pypa.io/get-pip.py
+          python3 get-pip.py --no-warn-script-location --target=. || python get-pip.py --no-warn-script-location --target=.
+          rm get-pip.py
+          
+          # Создаём структуру для venv
+          mkdir -p venv/Scripts
+          
+          # Копируем Python в venv (для совместимости)
+          cp python*.exe venv/Scripts/ 2>/dev/null || true
+          cp python*.dll venv/Scripts/ 2>/dev/null || true
+          
+          # Создаём активационный скрипт
+          cat > venv/Scripts/activate.bat << 'EOF'
+@echo off
+set "VIRTUAL_ENV=%~dp0.."
+set "PATH=%VIRTUAL_ENV%\Scripts;%PATH%"
+EOF
+          
+          # Устанавливаем зависимости через pip
+          python3 -m pip install --target=venv/Lib/site-packages pydantic rich pyyaml --no-warn-script-location || \
+          python -m pip install --target=venv/Lib/site-packages pydantic rich pyyaml --no-warn-script-location
+          
+          # Устанавливаем s3flood
+          cd ..
+          python3 -m pip install --target=dist-portable/venv/Lib/site-packages -e . --no-warn-script-location || \
+          python -m pip install --target=dist-portable/venv/Lib/site-packages -e . --no-warn-script-location
+          
+          cd dist-portable
+
+      - name: Copy project files
+        run: |
+          cd dist-portable
+          mkdir -p s3flood
+          cp -r ../src/s3flood/* s3flood/ 2>/dev/null || cp -r ../src/s3flood s3flood/
+          cp ../config.sample.yaml .
+          cp ../README.md .
+
+      - name: Create batch scripts
+        shell: bash
+        run: |
+          cd dist-portable
+          
+          # s3flood.bat - основной скрипт
+          cat > s3flood.bat << 'BAT_EOF'
+@echo off
+setlocal
+
+REM Определяем директорию скрипта
+set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%"
+
+REM Запускаем через Python embedded
+python.exe -m s3flood %*
+BAT_EOF
+          
+          # Создаём инструкцию
+          cat > INSTALL.txt << 'INSTALL_EOF'
+s3flood Portable для Windows
+============================
+
+Это portable версия s3flood - не требует установки Python.
+
+Использование:
+1. Распакуйте архив в любую папку (например, C:\s3flood-portable)
+2. Убедитесь, что AWS CLI установлен и доступен в PATH
+3. Запускайте команды через s3flood.bat:
+
+   s3flood.bat dataset-create --path .\loadset --target-bytes 5GB
+   s3flood.bat run --profile write-heavy --endpoint http://localhost:9000 --bucket test
+
+Или напрямую через Python:
+   python.exe -m s3flood --help
+
+Требования:
+- Windows 10/11 (64-bit)
+- AWS CLI должен быть установлен отдельно
+
+Примечание: Python embedded включён в этот дистрибутив, дополнительная установка не требуется.
+INSTALL_EOF
+
+      - name: Create ZIP archive
+        run: |
+          cd dist-portable
+          zip -r ../s3flood-windows-portable.zip . -q
+          cd ..
+          ls -lh s3flood-windows-portable.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: s3flood-windows-portable
+          path: s3flood-windows-portable.zip
+
+      - name: Attach portable bundle to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: s3flood-windows-portable.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
