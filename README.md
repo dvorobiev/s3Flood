@@ -81,6 +81,7 @@ pip install -e .
    ```powershell
    python -m s3flood dataset-create --path .\loadset --target-bytes 5GB
    ```
+   > Совет: держите `--group-limits` ≤5 ГБ, чтобы каждый файл загружался одним запросом `put-object`. Это защищает от `BadDigest` на несовместимых S3-бэкендах, где multipart CRC32 не поддерживается.
 
 5. **Готовый ZIP для Windows**. Workflow `windows-bundle` автоматически собирает `s3flood.exe` + `config.sample.yaml` + README и публикует архив `s3flood-windows.zip` в релизах GitHub. На офлайн машине достаточно:
    - установить AWS CLI;
@@ -139,6 +140,14 @@ python -m s3flood dataset-create --path ./loadset --use-symlinks
      --group-limits 100MB,1GB,10GB \
      --safety-ratio 0.8
    ```
+   > По умолчанию `--target-bytes auto` забирает до 80 % свободного места. Для компактного стенда (≈5 ГБ) используйте, например:
+   > ```bash
+   > python -m s3flood dataset-create ^
+   >   --path .\loadset ^
+   >   --target-bytes 5GB ^
+   >   --min-counts 20,10,5 ^
+   >   --group-limits 50MB,500MB,2GB
+   > ```
 3. Запустить нагрузку (write-heavy профиль):
    ```bash
    ./s3flood run \

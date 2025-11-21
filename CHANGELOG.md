@@ -1,4 +1,8 @@
 ## Changelog
+### 0.3.2 — Fix BadDigest on Windows uploads
+- Uploads `<5 ГБ` теперь выполняются одиночным `put-object` (мы поднимаем `multipart_threshold` через `AWS_CLI_FILE_TRANSFER_CONFIG`). Это устраняет `BadDigest` на S3-совместимых хранилищах без поддержки CRC32.
+- README дополнен примерами компактного датасета и советами по размерам файлов.
+
 ### 0.3.1 — Windows bundle и офлайн-инструкции
 - Добавлен workflow `windows-bundle`, автоматически собирающий `s3flood.exe` через PyInstaller и прикрепляющий `s3flood-windows.zip` к релизам/артефактам.
 - README пополнился подробной инструкцией по офлайн-развёртыванию на Windows и ссылкой на готовый ZIP.
