@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   build-portable:
-    runs-on: ubuntu-latest  # Используем Linux для простоты, можно переделать на windows-latest
+    runs-on: windows-latest  # Используем Windows для корректной работы с Windows-специфичными файлами
 
     steps:
       - name: Checkout
@@ -32,65 +32,67 @@ jobs:
           pip install -e .
 
       - name: Download Python embedded
+        shell: pwsh
         run: |
-          PYTHON_VERSION="3.11.9"
-          PYTHON_EMBED_URL="https://www.python.org/ftp/python/${PYTHON_VERSION}/python-${PYTHON_VERSION}-embed-amd64.zip"
-          mkdir -p dist-portable
-          curl -L -o dist-portable/python-embed.zip "$PYTHON_EMBED_URL"
+          $PYTHON_VERSION = "3.11.9"
+          $PYTHON_EMBED_URL = "https://www.python.org/ftp/python/$PYTHON_VERSION/python-$PYTHON_VERSION-embed-amd64.zip"
+          New-Item -ItemType Directory -Path "dist-portable" -Force | Out-Null
+          Invoke-WebRequest -Uri $PYTHON_EMBED_URL -OutFile "dist-portable\python-embed.zip"
 
       - name: Prepare portable distribution
+        shell: pwsh
         run: |
           cd dist-portable
           
           # Распаковываем Python embedded
-          unzip -q python-embed.zip
-          rm python-embed.zip
+          Expand-Archive -Path python-embed.zip -DestinationPath . -Force
+          Remove-Item python-embed.zip
           
           # Скачиваем и устанавливаем pip
-          curl -L -o get-pip.py https://bootstrap.pypa.io/get-pip.py
-          python3 get-pip.py --no-warn-script-location --target=. || python get-pip.py --no-warn-script-location --target=.
-          rm get-pip.py
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile "get-pip.py"
+          python.exe get-pip.py --no-warn-script-location --target=.
+          Remove-Item get-pip.py
           
           # Создаём структуру для venv
-          mkdir -p venv/Scripts
+          New-Item -ItemType Directory -Path "venv\Lib\site-packages" -Force | Out-Null
+          New-Item -ItemType Directory -Path "venv\Scripts" -Force | Out-Null
           
-          # Копируем Python в venv (для совместимости)
-          cp python*.exe venv/Scripts/ 2>/dev/null || true
-          cp python*.dll venv/Scripts/ 2>/dev/null || true
+          # Копируем Python в venv Scripts для удобства
+          Copy-Item python*.exe venv\Scripts\ -ErrorAction SilentlyContinue
+          Copy-Item python*.dll venv\Scripts\ -ErrorAction SilentlyContinue
           
           # Создаём активационный скрипт
-          cat > venv/Scripts/activate.bat << 'EOF'
+          @"
 @echo off
 set "VIRTUAL_ENV=%~dp0.."
 set "PATH=%VIRTUAL_ENV%\Scripts;%PATH%"
-EOF
+"@ | Out-File -FilePath "venv\Scripts\activate.bat" -Encoding ASCII
           
           # Устанавливаем зависимости через pip
-          python3 -m pip install --target=venv/Lib/site-packages pydantic rich pyyaml --no-warn-script-location || \
-          python -m pip install --target=venv/Lib/site-packages pydantic rich pyyaml --no-warn-script-location
+          python.exe -m pip install --target=venv\Lib\site-packages pydantic rich pyyaml --no-warn-script-location
           
           # Устанавливаем s3flood
           cd ..
-          python3 -m pip install --target=dist-portable/venv/Lib/site-packages -e . --no-warn-script-location || \
-          python -m pip install --target=dist-portable/venv/Lib/site-packages -e . --no-warn-script-location
+          python.exe -m pip install --target=dist-portable\venv\Lib\site-packages -e . --no-warn-script-location
           
           cd dist-portable
 
       - name: Copy project files
+        shell: pwsh
         run: |
           cd dist-portable
-          mkdir -p s3flood
-          cp -r ../src/s3flood/* s3flood/ 2>/dev/null || cp -r ../src/s3flood s3flood/
-          cp ../config.sample.yaml .
-          cp ../README.md .
+          New-Item -ItemType Directory -Path "s3flood" -Force | Out-Null
+          Copy-Item -Path "..\src\s3flood\*" -Destination "s3flood\" -Recurse -Force
+          Copy-Item -Path "..\config.sample.yaml" -Destination "."
+          Copy-Item -Path "..\README.md" -Destination "."
 
       - name: Create batch scripts
-        shell: bash
+        shell: pwsh
         run: |
           cd dist-portable
           
           # s3flood.bat - основной скрипт
-          cat > s3flood.bat << 'BAT_EOF'
+          @"
 @echo off
 setlocal
 
@@ -100,10 +102,10 @@ cd /d "%SCRIPT_DIR%"
 
 REM Запускаем через Python embedded
 python.exe -m s3flood %*
-BAT_EOF
+"@ | Out-File -FilePath "s3flood.bat" -Encoding ASCII
           
           # Создаём инструкцию
-          cat > INSTALL.txt << 'INSTALL_EOF'
+          @"
 s3flood Portable для Windows
 ============================
 
@@ -125,14 +127,14 @@ s3flood Portable для Windows
 - AWS CLI должен быть установлен отдельно
 
 Примечание: Python embedded включён в этот дистрибутив, дополнительная установка не требуется.
-INSTALL_EOF
+"@ | Out-File -FilePath "INSTALL.txt" -Encoding UTF8
 
       - name: Create ZIP archive
+        shell: pwsh
         run: |
-          cd dist-portable
-          zip -r ../s3flood-windows-portable.zip . -q
-          cd ..
-          ls -lh s3flood-windows-portable.zip
+          Compress-Archive -Path dist-portable\* -DestinationPath s3flood-windows-portable.zip -Force
+          $size = (Get-Item s3flood-windows-portable.zip).Length
+          Write-Host "✅ ZIP создан, размер: $([math]::Round($size/1MB, 2)) MB"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
