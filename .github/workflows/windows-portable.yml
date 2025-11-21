@@ -53,6 +53,10 @@ jobs:
           python.exe get-pip.py --no-warn-script-location --target=.
           Remove-Item get-pip.py
           
+          # Исправляем python311._pth чтобы загружать модули из site-packages
+          # Раскомментируем import site
+          (Get-Content python311._pth) -replace '#import site', 'import site' | Set-Content python311._pth
+          
           # Устанавливаем зависимости прямо в корень Python embedded (чтобы были доступны по умолчанию)
           # Python embedded ищет модули в текущей директории и в Lib/site-packages
           New-Item -ItemType Directory -Path "Lib\site-packages" -Force | Out-Null
