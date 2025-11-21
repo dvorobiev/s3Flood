@@ -34,7 +34,7 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --name s3flood --onefile --paths src --hidden-import s3flood.cli --hidden-import s3flood.config --hidden-import s3flood.dataset --hidden-import s3flood.executor s3flood_entry.py
+          pyinstaller --name s3flood --onefile --paths src --collect-all pydantic --collect-all rich --collect-all yaml --hidden-import s3flood --hidden-import s3flood.cli --hidden-import s3flood.config --hidden-import s3flood.dataset --hidden-import s3flood.executor --hidden-import pydantic --hidden-import pydantic_core --hidden-import pydantic._internal --hidden-import rich --hidden-import rich.console --hidden-import rich.table --hidden-import rich.progress --hidden-import yaml --hidden-import _yaml s3flood_entry.py
 
       - name: Prepare bundle
         shell: pwsh
