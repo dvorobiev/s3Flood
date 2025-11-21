@@ -34,7 +34,7 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --name s3flood --onefile src/s3flood/__main__.py
+          pyinstaller --name s3flood --onefile --paths src --hidden-import s3flood.cli --hidden-import s3flood.config --hidden-import s3flood.dataset --hidden-import s3flood.executor s3flood_entry.py
 
       - name: Prepare bundle
         shell: pwsh
