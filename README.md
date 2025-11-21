@@ -96,54 +96,23 @@ pip install -e .
    - распаковать архив из релиза;
    - запускать `.\s3flood.exe run --config config.yaml`.
 
-#### Локальная сборка Windows exe (для разработки)
 
-Если нужно собрать `s3flood.exe` локально на Windows для тестирования:
+### Использование
 
-```powershell
-# 1. Установить зависимости
-python -m pip install --upgrade pip
-pip install -e .
-pip install pyinstaller
-
-# 2. Собрать exe
-pyinstaller --name s3flood --onefile --paths src --collect-all s3flood --collect-all pydantic --collect-all rich --collect-all yaml s3flood_entry.py
-
-# 3. Проверить
-.\dist\s3flood.exe --help
-.\dist\s3flood.exe dataset-create --help
-.\dist\s3flood.exe run --help
-```
-
-Готовый `s3flood.exe` будет в папке `dist\`.
-
-### CLI
-
-После установки через `./install.sh` используйте wrapper скрипт:
-
-Создание датасета (по свободному месту на диске):
+**Создание датасета:**
 ```bash
-./s3flood dataset-create --path ./loadset --use-symlinks
+./s3flood dataset-create --path ./loadset --target-bytes 1GB
 ```
 
-Запуск записи (пример, MinIO):
+**Запуск теста:**
 ```bash
 ./s3flood run \
   --profile write-heavy \
-  --client awscli \
-  --threads 8 \
-  --endpoint http://127.0.0.1:9000 \
-  --bucket test-bucket \
+  --endpoint http://localhost:9000 \
+  --bucket test \
   --access-key minioadmin \
   --secret-key minioadmin \
-  --data-dir ./loadset/data \
-  --report out.json \
-  --metrics out.csv
-```
-
-Альтернативно, если venv активирован:
-```bash
-python -m s3flood dataset-create --path ./loadset --use-symlinks
+  --data-dir ./loadset/data
 ```
 
 Форматы вывода:
