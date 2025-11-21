@@ -36,6 +36,49 @@ jobs:
         run: |
           pyinstaller --name s3flood --onefile --paths src --collect-all pydantic --collect-all rich --collect-all yaml --hidden-import s3flood --hidden-import s3flood.cli --hidden-import s3flood.config --hidden-import s3flood.dataset --hidden-import s3flood.executor --hidden-import pydantic --hidden-import pydantic_core --hidden-import pydantic._internal --hidden-import rich --hidden-import rich.console --hidden-import rich.table --hidden-import rich.progress --hidden-import yaml --hidden-import _yaml s3flood_entry.py
 
+      - name: Test executable
+        shell: pwsh
+        run: |
+          Write-Host "Проверка работоспособности s3flood.exe..."
+          $exePath = "dist\s3flood.exe"
+          if (-not (Test-Path $exePath)) {
+            Write-Error "Файл $exePath не найден!"
+            exit 1
+          }
+          Write-Host "Файл найден, размер: $((Get-Item $exePath).Length) байт"
+          
+          # Проверка базовой команды --help (должна показать справку)
+          Write-Host "`nЗапуск: .\s3flood.exe --help"
+          $helpOutput = & $exePath --help 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Команда --help завершилась с ошибкой (код: $LASTEXITCODE)"
+            Write-Output $helpOutput
+            exit 1
+          }
+          Write-Host "✅ Команда --help работает"
+          
+          # Проверка команды dataset-create --help
+          Write-Host "`nЗапуск: .\s3flood.exe dataset-create --help"
+          $datasetHelpOutput = & $exePath dataset-create --help 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Команда dataset-create --help завершилась с ошибкой (код: $LASTEXITCODE)"
+            Write-Output $datasetHelpOutput
+            exit 1
+          }
+          Write-Host "✅ Команда dataset-create --help работает"
+          
+          # Проверка команды run --help
+          Write-Host "`nЗапуск: .\s3flood.exe run --help"
+          $runHelpOutput = & $exePath run --help 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Команда run --help завершилась с ошибкой (код: $LASTEXITCODE)"
+            Write-Output $runHelpOutput
+            exit 1
+          }
+          Write-Host "✅ Команда run --help работает"
+          
+          Write-Host "`n✅ Все проверки пройдены успешно!"
+
       - name: Prepare bundle
         shell: pwsh
         run: |
