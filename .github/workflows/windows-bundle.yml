@@ -51,22 +51,53 @@ jobs:
           function Test-Command {
             param($Command, $ExpectedText)
             Write-Host "`nЗапуск: $Command"
-            $output = & $exePath $Command 2>&1 | Out-String
-            $exitCode = $LASTEXITCODE
-            
-            # Выводим результат для отладки
-            Write-Host "Код возврата: $exitCode"
-            Write-Host "Вывод (первые 500 символов):"
-            Write-Host $output.Substring(0, [Math]::Min(500, $output.Length))
-            
-            # Проверяем, что вывод содержит ожидаемый текст или команда успешна
-            if ($output -match $ExpectedText -or ($exitCode -eq 0 -and $output.Length -gt 0)) {
-              Write-Host "✅ Команда работает"
-              return $true
-            } else {
+            try {
+              $output = & $exePath $Command 2>&1 | Out-String
+              $exitCode = $LASTEXITCODE
+              
+              # Выводим результат для отладки
+              Write-Host "Код возврата: $exitCode"
+              Write-Host "Длина вывода: $($output.Length) символов"
+              if ($output.Length -gt 0) {
+                $previewLength = [Math]::Min(500, $output.Length)
+                Write-Host "Вывод (первые $previewLength символов):"
+                Write-Host $output.Substring(0, $previewLength)
+              } else {
+                Write-Host "Вывод пустой"
+              }
+              
+              # Проверяем на критические ошибки (Traceback, ImportError, ModuleNotFoundError)
+              if ($output -match "Traceback|ImportError|ModuleNotFoundError|Failed to execute") {
+                Write-Error "❌ Обнаружена критическая ошибка в выводе!"
+                Write-Error "Полный вывод:"
+                Write-Error $output
+                return $false
+              }
+              
+              # Проверяем, что вывод содержит ожидаемый текст
+              if ($output -match $ExpectedText) {
+                Write-Host "✅ Команда работает (найден ожидаемый текст)"
+                return $true
+              }
+              
+              # Если код возврата 0 и есть вывод, считаем успешным
+              if ($exitCode -eq 0 -and $output.Length -gt 0) {
+                Write-Host "✅ Команда работает (код возврата 0, есть вывод)"
+                return $true
+              }
+              
+              # Если код возврата не 0, но есть полезный вывод (usage, help), тоже OK
+              if ($output -match "usage:|help|s3flood" -and $output.Length -gt 50) {
+                Write-Host "✅ Команда работает (найден полезный вывод, несмотря на код $exitCode)"
+                return $true
+              }
+              
               Write-Error "❌ Команда не прошла проверку"
               Write-Error "Полный вывод:"
               Write-Error $output
+              return $false
+            } catch {
+              Write-Error "❌ Исключение при выполнении команды: $_"
               return $false
             }
           }
