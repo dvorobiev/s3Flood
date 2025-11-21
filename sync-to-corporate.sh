@@ -108,8 +108,11 @@ push_branch_without_ci() {
     
     echo "  → Ветка: $branch (без CI/CD файлов)"
     
-    # Создаём временную ветку для синхронизации без .github/
-    TEMP_BRANCH="sync-corporate-$$"
+    # Создаём уникальную временную ветку для синхронизации без .github/
+    # Используем имя ветки и PID для уникальности
+    TEMP_BRANCH="sync-corporate-${branch}-$$"
+    # Очищаем имя от недопустимых символов (например, слеши в именах веток)
+    TEMP_BRANCH=$(echo "$TEMP_BRANCH" | tr '/' '-' | tr ' ' '-')
     
     # Проверяем, существует ли уже эта ветка
     if git show-ref --verify --quiet "refs/heads/$TEMP_BRANCH"; then
