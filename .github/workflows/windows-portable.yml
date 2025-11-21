@@ -93,30 +93,8 @@ jobs:
           $batContent | Out-File -FilePath "s3flood.bat" -Encoding ASCII
           
           # Создаём инструкцию
-          $installLines = @(
-            "s3flood Portable для Windows",
-            "============================",
-            "",
-            "Это portable версия s3flood - не требует установки Python.",
-            "",
-            "Использование:",
-            "1. Распакуйте архив в любую папку (например, C:\s3flood-portable)",
-            "2. Убедитесь, что AWS CLI установлен и доступен в PATH",
-            "3. Запускайте команды через s3flood.bat:",
-            "",
-            "   s3flood.bat dataset-create --path .\loadset --target-bytes 5GB",
-            "   s3flood.bat run --profile write-heavy --endpoint http://localhost:9000 --bucket test",
-            "",
-            "Или напрямую через Python:",
-            "   python.exe -m s3flood --help",
-            "",
-            "Требования:",
-            "- Windows 10/11 (64-bit)",
-            "- AWS CLI должен быть установлен отдельно",
-            "",
-            "Примечание: Python embedded включён в этот дистрибутив, дополнительная установка не требуется."
-          )
-          $installLines -join "`n" | Out-File -FilePath "INSTALL.txt" -Encoding UTF8
+          $installText = "s3flood Portable для Windows`n============================`n`nЭто portable версия s3flood - не требует установки Python.`n`nИспользование:`n1. Распакуйте архив в любую папку (например, C:\s3flood-portable)`n2. Убедитесь, что AWS CLI установлен и доступен в PATH`n3. Запускайте команды через s3flood.bat:`n`n   s3flood.bat dataset-create --path .\loadset --target-bytes 5GB`n   s3flood.bat run --profile write-heavy --endpoint http://localhost:9000 --bucket test`n`nИли напрямую через Python:`n   python.exe -m s3flood --help`n`nТребования:`n- Windows 10/11 (64-bit)`n- AWS CLI должен быть установлен отдельно`n`nПримечание: Python embedded включён в этот дистрибутив, дополнительная установка не требуется."
+          $installText | Out-File -FilePath "INSTALL.txt" -Encoding UTF8
 
       - name: Create ZIP archive
         shell: pwsh
