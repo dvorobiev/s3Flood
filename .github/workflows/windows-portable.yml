@@ -53,24 +53,16 @@ jobs:
           python.exe get-pip.py --no-warn-script-location --target=.
           Remove-Item get-pip.py
           
-          # Создаём структуру для venv
-          New-Item -ItemType Directory -Path "venv\Lib\site-packages" -Force | Out-Null
-          New-Item -ItemType Directory -Path "venv\Scripts" -Force | Out-Null
+          # Устанавливаем зависимости прямо в корень Python embedded (чтобы были доступны по умолчанию)
+          # Python embedded ищет модули в текущей директории и в Lib/site-packages
+          New-Item -ItemType Directory -Path "Lib\site-packages" -Force | Out-Null
           
-          # Копируем Python в venv Scripts для удобства
-          Copy-Item python*.exe venv\Scripts\ -ErrorAction SilentlyContinue
-          Copy-Item python*.dll venv\Scripts\ -ErrorAction SilentlyContinue
-          
-          # Создаём активационный скрипт
-          $activateContent = "@echo off`nset `"VIRTUAL_ENV=%~dp0..`"`nset `"PATH=%VIRTUAL_ENV%\Scripts;%PATH%`""
-          $activateContent | Out-File -FilePath "venv\Scripts\activate.bat" -Encoding ASCII
-          
-          # Устанавливаем зависимости через pip
-          python.exe -m pip install --target=venv\Lib\site-packages pydantic rich pyyaml --no-warn-script-location
+          # Устанавливаем зависимости через pip прямо в Python embedded
+          python.exe -m pip install --target=Lib\site-packages pydantic rich pyyaml --no-warn-script-location
           
           # Устанавливаем s3flood
           cd ..
-          python.exe -m pip install --target=dist-portable\venv\Lib\site-packages -e . --no-warn-script-location
+          python.exe -m pip install --target=dist-portable\Lib\site-packages -e . --no-warn-script-location
           
           cd dist-portable
 
@@ -89,7 +81,8 @@ jobs:
           cd dist-portable
           
           # s3flood.bat - основной скрипт
-          $batContent = "@echo off`nsetlocal`n`nREM Определяем директорию скрипта`nset `"SCRIPT_DIR=%~dp0`"`ncd /d `"%SCRIPT_DIR%`"`n`nREM Запускаем через Python embedded`npython.exe -m s3flood %*"
+          # Устанавливаем PYTHONPATH чтобы Python находил модули в Lib/site-packages
+          $batContent = "@echo off`nsetlocal`n`nREM Определяем директорию скрипта`nset `"SCRIPT_DIR=%~dp0`"`ncd /d `"%SCRIPT_DIR%`"`n`nREM Устанавливаем PYTHONPATH для поиска модулей`nset `"PYTHONPATH=%SCRIPT_DIR%Lib\site-packages;%PYTHONPATH%`"`n`nREM Запускаем через Python embedded`npython.exe -m s3flood %*"
           $batContent | Out-File -FilePath "s3flood.bat" -Encoding ASCII
           
           # Создаём инструкцию
