@@ -1211,12 +1211,12 @@ def run_profile(args):
                         files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
                         files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     else:
-                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
-                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
-                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                    err_part = f"Err {files_err}"
-                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
+                        w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
+                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                        w_bytes_part = f"W:{format_bytes(bytes_done)}"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
                     files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
                 plain_lines.append(files_line)
