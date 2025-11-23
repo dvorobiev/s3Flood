@@ -29,6 +29,19 @@ ANSI_CYAN = "\x1b[36m" if USE_COLORS else ""
 
 ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
 
+# Спиннер для индикации активности
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+spinner_index = 0
+spinner_lock = threading.Lock()
+
+def get_spinner():
+    """Возвращает следующий кадр спиннера."""
+    global spinner_index
+    with spinner_lock:
+        frame = SPINNER_FRAMES[spinner_index]
+        spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
+        return frame
+
 
 def visible_len(s: str) -> int:
     return len(ANSI_REGEX.sub("", s))
@@ -219,6 +232,10 @@ class Metrics:
         write_MBps_avg = (self.write_bytes / 1024 / 1024 / write_duration) if write_duration > 0 else 0.0
         read_MBps_avg = (self.read_bytes / 1024 / 1024 / read_duration) if read_duration > 0 else 0.0
         
+        # Получаем аналитику по файлам
+        write_analysis = self.get_file_stats("upload")
+        read_analysis = self.get_file_stats("download")
+        
         out = {
             "duration_sec": dur,
             "write_bytes": self.write_bytes,
@@ -231,6 +248,26 @@ class Metrics:
             "write_ok_ops": self.write_ops_ok,
             "err_ops": self.err_ops,
         }
+        
+        # Добавляем аналитику по файлам
+        if write_analysis[0] or write_analysis[1]:  # Есть статистика по записи
+            small_stats, large_stats, avg_speed = write_analysis
+            write_file_analysis = {
+                "top10_small": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (small_stats or [])],
+                "top10_large": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (large_stats or [])],
+                "avg_speed_mbps": avg_speed,
+            }
+            out["write_file_analysis"] = write_file_analysis
+        
+        if read_analysis[0] or read_analysis[1]:  # Есть статистика по чтению
+            small_stats, large_stats, avg_speed = read_analysis
+            read_file_analysis = {
+                "top10_small": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (small_stats or [])],
+                "top10_large": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (large_stats or [])],
+                "avg_speed_mbps": avg_speed,
+            }
+            out["read_file_analysis"] = read_file_analysis
+        
         with open(self.json_path, "w") as f:
             json.dump(out, f, indent=2)
         return out
@@ -576,6 +613,10 @@ def run_profile(args):
     cycle_count = 0
     cycle_lock = threading.Lock()
     last_cycle_restart = 0.0  # Время последнего перезапуска цикла
+    
+    # Отслеживание файлов в текущем цикле для infinite режима
+    files_in_current_cycle = 0
+    cycle_files_lock = threading.Lock()
 
     def worker():
         nonlocal active_uploads, active_downloads
@@ -634,6 +675,10 @@ def run_profile(args):
                         grp["done_bytes"] += nbytes
                     with uploaded_objects_lock:
                         uploaded_objects[job.path.name] = endpoint
+                    # Обновляем счетчик файлов в текущем цикле для infinite режима
+                    if getattr(args, "infinite", False) and op == "upload":
+                        with cycle_files_lock:
+                            files_in_current_cycle += 1
                 else:
                     with group_lock:
                         groups[job.group]["errors"] += 1
@@ -809,6 +854,8 @@ def run_profile(args):
                                 # Для write профиля добавляем все файлы снова в очередь
                                 with cycle_lock:
                                     cycle_count += 1
+                                with cycle_files_lock:
+                                    files_in_current_cycle = 0  # Сбрасываем счетчик для нового цикла
                                 for job in jobs:
                                     try:
                                         q.put(("upload", job), block=False)
@@ -819,6 +866,8 @@ def run_profile(args):
                                 # Для read профиля добавляем все объекты снова в очередь
                                 with cycle_lock:
                                     cycle_count += 1
+                                with cycle_files_lock:
+                                    files_in_current_cycle = 0  # Сбрасываем счетчик для нового цикла
                                 for job in jobs:
                                     try:
                                         q.put(("download", job), block=False)
@@ -972,7 +1021,8 @@ def run_profile(args):
                 pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
                 with cycle_lock:
                     cycle_info = f" | cycle {cycle_count}" if getattr(args, "infinite", False) else ""
-                header = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
+                spinner = get_spinner() if inflight > 0 else " "
+                header = f"{spinner} S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
                 # Для фазы чтения или mixed: учитываем активные операции и pending
@@ -1029,8 +1079,10 @@ def run_profile(args):
                     phase_info = " [WRITE]"
                     # В фазе записи: подсвечиваем данные записи (W:) зелёным, R: без стилей
                     if getattr(args, "infinite", False):
-                        # В бесконечном режиме показываем общее количество записанных файлов
-                        w_part = f"W:{files_done} files written"
+                        # В бесконечном режиме показываем файлы в текущем цикле и общее количество
+                        with cycle_files_lock:
+                            current_cycle_files = files_in_current_cycle
+                        w_part = f"W:{current_cycle_files}/{total_files} (cycle) | total: {files_done}"
                         r_part = f"R:{files_read}"
                         w_bytes_part = f"W:{format_bytes(bytes_done)}"
                         r_bytes_part = f"R:{format_bytes(bytes_read)}"
@@ -1048,7 +1100,13 @@ def run_profile(args):
                     files_color = ()  # Без общего цвета строки
                 plain_lines.append(files_line)
                 styled_lines.append((files_line_styled, files_color, False))
-                load_line = f"Load active {inflight}/{args.threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} | ops {ops_per_sec:.2f}/s"
+                
+                # Для BURSTY режима показываем эффективное количество потоков
+                effective_threads = args.threads
+                if pattern == "bursty" and burst_active:
+                    effective_threads = int(args.threads * burst_intensity_multiplier)
+                
+                load_line = f"Load active {inflight}/{effective_threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} tasks | ops {ops_per_sec:.2f} files/s"
                 plain_lines.append(load_line)
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
                 
@@ -1075,7 +1133,7 @@ def run_profile(args):
                     rate_line_plain = f"Rates {w_rates_part} | {r_rates_part} | last {last_info}"
                     rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_GREEN)} | {r_rates_part} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
                 plain_lines.append(rate_line_plain)
-                styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_MAGENTA), True))
+                styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
                 
                 # Цветовое выделение для latency
                 if lat_line != "n/a":
@@ -1118,46 +1176,9 @@ def run_profile(args):
                     latency_line_styled = f"Latency {lat_line}"
                 plain_lines.append(f"Latency {lat_line}")
                 styled_lines.append((latency_line_styled, (ANSI_DIM,), False))
-                
-                # Анализатор ТОП10 файлов
-                if profile == "write" or (profile == "read"):
-                    op_type = "upload" if profile == "write" else "download"
-                    small_stats, large_stats, avg_speed_all = metrics.get_file_stats(op_type)
-                    if small_stats or large_stats:
-                        analyzer_title = "File Analyzer:"
-                        plain_lines.append(analyzer_title)
-                        styled_lines.append((analyzer_title, (ANSI_BOLD,), False))
-                        
-                        # ТОП10 маленьких
-                        if small_stats:
-                            small_line = "  Small (top10): "
-                            small_parts = []
-                            for size_bytes, count, speed in small_stats[:5]:  # Показываем только первые 5
-                                size_str = format_bytes(size_bytes)
-                                small_parts.append(f"{size_str}×{count}@{speed:.1f}MB/s")
-                            small_line += " | ".join(small_parts)
-                            plain_lines.append(small_line)
-                            styled_lines.append((small_line, (ANSI_CYAN,), False))
-                        
-                        # ТОП10 больших
-                        if large_stats:
-                            large_line = "  Large (top10): "
-                            large_parts = []
-                            for size_bytes, count, speed in large_stats[-5:]:  # Показываем последние 5
-                                size_str = format_bytes(size_bytes)
-                                large_parts.append(f"{size_str}×{count}@{speed:.1f}MB/s")
-                            large_line += " | ".join(large_parts)
-                            plain_lines.append(large_line)
-                            styled_lines.append((large_line, (ANSI_YELLOW,), False))
-                        
-                        # Средняя скорость
-                        if avg_speed_all > 0:
-                            avg_line = f"  Avg speed: {avg_speed_all:.1f} MB/s"
-                            plain_lines.append(avg_line)
-                            styled_lines.append((avg_line, (ANSI_GREEN,), False))
                 interior_width = max(visible_len(line) for line in plain_lines)
                 border = "+" + "-" * (interior_width + 2) + "+"
-                speed_border = "|" + style("=" * (interior_width + 2), ANSI_BOLD, ANSI_MAGENTA) + "|"
+                speed_border = "|" + style("=" * (interior_width + 2), ANSI_BOLD, ANSI_CYAN) + "|"
                 render_lines = [border]
                 for plain, codes, accent in styled_lines:
                     if accent:
