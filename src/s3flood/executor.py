@@ -91,8 +91,6 @@ class Metrics:
         self.err_ops = 0
         self.last_upload = None
         self.last_download = None
-        self.upload_latencies = []
-        self.download_latencies = []
         with open(self.csv_path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["ts_start","ts_end","op","bytes","status","latency_ms","error"])
             w.writeheader()
@@ -122,12 +120,10 @@ class Metrics:
                     self.read_ops_ok += 1
                     self.read_bytes += nbytes
                     self.last_download = {"bytes": nbytes, "lat_ms": lat_ms, "ended": end}
-                    self.download_latencies.append(lat_ms)
                 elif op == "upload":
                     self.write_ops_ok += 1
                     self.write_bytes += nbytes
                     self.last_upload = {"bytes": nbytes, "lat_ms": lat_ms, "ended": end}
-                    self.upload_latencies.append(lat_ms)
             else:
                 self.err_ops += 1
 
@@ -148,16 +144,6 @@ class Metrics:
             return data["lat_ms"]
         return None
 
-    def latency_percentiles(self, op_type="upload"):
-        latencies = self.upload_latencies if op_type == "upload" else self.download_latencies
-        if not latencies:
-            return None, None, None
-        data = sorted(latencies)
-        median = statistics.median(data)
-        p90_idx = max(int(len(data) * 0.9) - 1, 0)
-        p95_idx = max(int(len(data) * 0.95) - 1, 0)
-        return median, data[p90_idx], data[p95_idx]
-    
     def get_file_stats(self, op_type="upload"):
         """Возвращает статистику по файлам: ТОП10 больших, ТОП10 маленьких, средняя скорость."""
         file_stats = {}  # key: (bytes, count, total_time_ms, speeds)
@@ -198,21 +184,57 @@ class Metrics:
         
         small_stats = []
         for size_bytes, stats in top10_small:
-            avg_speed = statistics.mean(stats["speeds"]) if stats["speeds"] else 0.0
-            small_stats.append((size_bytes, stats["count"], avg_speed))
+            speeds = stats["speeds"]
+            if speeds:
+                avg_speed = statistics.mean(speeds)
+                median_speed = statistics.median(speeds)
+                min_speed = min(speeds)
+                max_speed = max(speeds)
+                sorted_speeds = sorted(speeds)
+                p90_idx = max(int(len(sorted_speeds) * 0.9) - 1, 0)
+                p95_idx = max(int(len(sorted_speeds) * 0.95) - 1, 0)
+                p90_speed = sorted_speeds[p90_idx]
+                p95_speed = sorted_speeds[p95_idx]
+            else:
+                avg_speed = median_speed = min_speed = max_speed = p90_speed = p95_speed = 0.0
+            small_stats.append((size_bytes, stats["count"], avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed))
         
         large_stats = []
         for size_bytes, stats in top10_large:
-            avg_speed = statistics.mean(stats["speeds"]) if stats["speeds"] else 0.0
-            large_stats.append((size_bytes, stats["count"], avg_speed))
+            speeds = stats["speeds"]
+            if speeds:
+                avg_speed = statistics.mean(speeds)
+                median_speed = statistics.median(speeds)
+                min_speed = min(speeds)
+                max_speed = max(speeds)
+                sorted_speeds = sorted(speeds)
+                p90_idx = max(int(len(sorted_speeds) * 0.9) - 1, 0)
+                p95_idx = max(int(len(sorted_speeds) * 0.95) - 1, 0)
+                p90_speed = sorted_speeds[p90_idx]
+                p95_speed = sorted_speeds[p95_idx]
+            else:
+                avg_speed = median_speed = min_speed = max_speed = p90_speed = p95_speed = 0.0
+            large_stats.append((size_bytes, stats["count"], avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed))
         
         # Средняя скорость по всем файлам
         all_speeds = []
         for stats in file_stats.values():
             all_speeds.extend(stats["speeds"])
-        avg_speed_all = statistics.mean(all_speeds) if all_speeds else 0.0
         
-        return small_stats, large_stats, avg_speed_all
+        if all_speeds:
+            avg_speed_all = statistics.mean(all_speeds)
+            median_speed_all = statistics.median(all_speeds)
+            min_speed_all = min(all_speeds)
+            max_speed_all = max(all_speeds)
+            sorted_all_speeds = sorted(all_speeds)
+            p90_idx = max(int(len(sorted_all_speeds) * 0.9) - 1, 0)
+            p95_idx = max(int(len(sorted_all_speeds) * 0.95) - 1, 0)
+            p90_speed_all = sorted_all_speeds[p90_idx]
+            p95_speed_all = sorted_all_speeds[p95_idx]
+        else:
+            avg_speed_all = median_speed_all = min_speed_all = max_speed_all = p90_speed_all = p95_speed_all = 0.0
+        
+        return small_stats, large_stats, (avg_speed_all, median_speed_all, min_speed_all, max_speed_all, p90_speed_all, p95_speed_all)
 
     def finalize(self):
         dur = max(time.time() - self._start, 1e-6)
@@ -267,20 +289,84 @@ class Metrics:
         
         # Добавляем аналитику по файлам
         if write_analysis[0] or write_analysis[1]:  # Есть статистика по записи
-            small_stats, large_stats, avg_speed = write_analysis
+            small_stats, large_stats, speed_stats = write_analysis
+            avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed = speed_stats
             write_file_analysis = {
-                "top10_small": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (small_stats or [])],
-                "top10_large": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (large_stats or [])],
-                "avg_speed_mbps": avg_speed,
+                "top10_small": [
+                    {
+                        "size_bytes": s[0],
+                        "count": s[1],
+                        "avg_speed_mbps": s[2],
+                        "median_speed_mbps": s[3],
+                        "min_speed_mbps": s[4],
+                        "max_speed_mbps": s[5],
+                        "p90_speed_mbps": s[6],
+                        "p95_speed_mbps": s[7]
+                    }
+                    for s in (small_stats or [])
+                ],
+                "top10_large": [
+                    {
+                        "size_bytes": s[0],
+                        "count": s[1],
+                        "avg_speed_mbps": s[2],
+                        "median_speed_mbps": s[3],
+                        "min_speed_mbps": s[4],
+                        "max_speed_mbps": s[5],
+                        "p90_speed_mbps": s[6],
+                        "p95_speed_mbps": s[7]
+                    }
+                    for s in (large_stats or [])
+                ],
+                "overall": {
+                    "avg_speed_mbps": avg_speed,
+                    "median_speed_mbps": median_speed,
+                    "min_speed_mbps": min_speed,
+                    "max_speed_mbps": max_speed,
+                    "p90_speed_mbps": p90_speed,
+                    "p95_speed_mbps": p95_speed
+                }
             }
             out["write_file_analysis"] = write_file_analysis
         
         if read_analysis[0] or read_analysis[1]:  # Есть статистика по чтению
-            small_stats, large_stats, avg_speed = read_analysis
+            small_stats, large_stats, speed_stats = read_analysis
+            avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed = speed_stats
             read_file_analysis = {
-                "top10_small": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (small_stats or [])],
-                "top10_large": [{"size_bytes": s[0], "count": s[1], "avg_speed_mbps": s[2]} for s in (large_stats or [])],
-                "avg_speed_mbps": avg_speed,
+                "top10_small": [
+                    {
+                        "size_bytes": s[0],
+                        "count": s[1],
+                        "avg_speed_mbps": s[2],
+                        "median_speed_mbps": s[3],
+                        "min_speed_mbps": s[4],
+                        "max_speed_mbps": s[5],
+                        "p90_speed_mbps": s[6],
+                        "p95_speed_mbps": s[7]
+                    }
+                    for s in (small_stats or [])
+                ],
+                "top10_large": [
+                    {
+                        "size_bytes": s[0],
+                        "count": s[1],
+                        "avg_speed_mbps": s[2],
+                        "median_speed_mbps": s[3],
+                        "min_speed_mbps": s[4],
+                        "max_speed_mbps": s[5],
+                        "p90_speed_mbps": s[6],
+                        "p95_speed_mbps": s[7]
+                    }
+                    for s in (large_stats or [])
+                ],
+                "overall": {
+                    "avg_speed_mbps": avg_speed,
+                    "median_speed_mbps": median_speed,
+                    "min_speed_mbps": min_speed,
+                    "max_speed_mbps": max_speed,
+                    "p90_speed_mbps": p90_speed,
+                    "p95_speed_mbps": p95_speed
+                }
             }
             out["read_file_analysis"] = read_file_analysis
         
@@ -519,31 +605,33 @@ def run_profile(args):
         print(f"Loaded {total_files} objects totalling {total_bytes/1024/1024:.1f} MB from bucket across groups: {group_summary}")
     else:
         # Для write и mixed профилей используем файлы из data_dir
-        data_root = Path(args.data_dir).resolve()
-        if not data_root.exists():
-            print(f"Data dir not found: {data_root}")
-            return
+        pass
+    
+    data_root = Path(args.data_dir).resolve()
+    if not data_root.exists():
+        print(f"Data dir not found: {data_root}")
+        return
 
-        files = gather_files(data_root)
-        if not files:
-            print(f"No dataset files found under {data_root}")
-            return
+    files = gather_files(data_root)
+    if not files:
+        print(f"No dataset files found under {data_root}")
+        return
 
-        try:
-            files.sort(key=lambda p: p.stat().st_size)
-            jobs: list[Job] = []
-            groups = {}
-            total_files = len(files)
-            total_bytes = 0
-            for p in files:
-                size = p.stat().st_size
-                rel = p.relative_to(data_root)
-                group = rel.parts[0] if rel.parts else "root"
-                jobs.append(Job(path=p, size=size, group=group))
-                total_bytes += size
-                grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
-                grp["total_files"] += 1
-                grp["total_bytes"] += size
+    try:
+        files.sort(key=lambda p: p.stat().st_size)
+        jobs: list[Job] = []
+        groups = {}
+        total_files = len(files)
+        total_bytes = 0
+        for p in files:
+            size = p.stat().st_size
+            rel = p.relative_to(data_root)
+            group = rel.parts[0] if rel.parts else "root"
+            jobs.append(Job(path=p, size=size, group=group))
+            total_bytes += size
+            grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
+            grp["total_files"] += 1
+            grp["total_bytes"] += size
             
             # Сортировка по порядку
             if order == "sequential":
@@ -551,11 +639,11 @@ def run_profile(args):
             else:  # random
                 random.shuffle(jobs)
             
-            group_summary = ", ".join(f"{g}={info['total_files']}" for g, info in groups.items())
-            print(f"Loaded {total_files} files totalling {total_bytes/1024/1024:.1f} MB across groups: {group_summary}")
-        except OSError as e:
-            print(f"Failed to stat dataset files: {e}")
-            return
+        group_summary = ", ".join(f"{g}={info['total_files']}" for g, info in groups.items())
+        print(f"Loaded {total_files} files totalling {total_bytes/1024/1024:.1f} MB across groups: {group_summary}")
+    except OSError as e:
+        print(f"Failed to stat dataset files: {e}")
+        return
 
     endpoints_list = list(getattr(args, "endpoints", []) or [])
     if not endpoints_list:
@@ -658,8 +746,8 @@ def run_profile(args):
                 # Для write и read профилей: если очередь пуста, завершаем worker
                 # Для mixed профиля: если upload фаза завершена и очередь пуста, завершаем worker
                 if profile == "mixed-70-30":
-                    if upload_phase_done.is_set() and q.empty():
-                        break
+                if upload_phase_done.is_set() and q.empty():
+                    break
                 else:
                     if q.empty() and not getattr(args, "infinite", False):
                         break
@@ -971,7 +1059,7 @@ def run_profile(args):
                     if profile == "read":
                         files_left = max(total_files - files_read - files_err, 0)
                     else:
-                        files_left = max(total_files - files_done - files_err, 0)
+                files_left = max(total_files - files_done - files_err, 0)
                 avg_wbps = metrics.avg_write_rate()
                 avg_rbps = metrics.avg_read_rate()
                 with active_lock:
@@ -1055,16 +1143,6 @@ def run_profile(args):
                         last_size_mb = last_upload["bytes"] / 1024 / 1024
                         last_dur = last_upload["lat_ms"] / 1000
                         last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                median_up, p90_up, p95_up = metrics.latency_percentiles("upload")
-                median_dn, p90_dn, p95_dn = metrics.latency_percentiles("download")
-                lat_line = "n/a"
-                if median_up is not None or median_dn is not None:
-                    parts = []
-                    if median_up is not None:
-                        parts.append(f"W:p50={median_up/1000:.2f}s p90={p90_up/1000:.2f}s")
-                    if median_dn is not None:
-                        parts.append(f"R:p50={median_dn/1000:.2f}s p90={p90_dn/1000:.2f}s")
-                    lat_line = " | ".join(parts)
                 plain_lines: list[str] = []
                 styled_lines: list[tuple[str, tuple[str, ...], bool]] = []
                 pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
@@ -1105,7 +1183,7 @@ def run_profile(args):
                     if mixed_phase_started:
                         phase_info = " [MIXED]"
                     else:
-                        phase_info = " [READ]"
+                    phase_info = " [READ]"
                     # В фазе чтения/mixed: подсвечиваем данные чтения (R:) зелёным, W: без стилей
                     # Разделяем на части для цветового выделения
                     w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
@@ -1133,13 +1211,13 @@ def run_profile(args):
                         files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
                         files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     else:
-                        w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
-                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                        w_bytes_part = f"W:{format_bytes(bytes_done)}"
-                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                        err_part = f"Err {files_err}"
-                        files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
-                        files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
+                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
+                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
+                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                    err_part = f"Err {files_err}"
+                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
+                    files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
                 plain_lines.append(files_line)
                 styled_lines.append((files_line_styled, files_color, False))
@@ -1168,7 +1246,7 @@ def run_profile(args):
                         # В mixed фазе подсвечиваем оба
                         rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_CYAN)}"
                     else:
-                        rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                    rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
                 else:
                     # В фазе записи: подсвечиваем W: зелёным, R: без стилей
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
@@ -1178,47 +1256,6 @@ def run_profile(args):
                 plain_lines.append(rate_line_plain)
                 styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
                 
-                # Цветовое выделение для latency
-                if lat_line != "n/a":
-                    if download_phase_started or mixed_phase_started:
-                        # В фазе чтения/mixed: подсвечиваем R: зелёным, W: без стилей (или оба, если mixed)
-                        if "W:" in lat_line and "R:" in lat_line:
-                            parts = lat_line.split(" | ")
-                            w_lat_part = parts[0] if parts[0].startswith("W:") else ""
-                            r_lat_part = parts[1] if len(parts) > 1 and parts[1].startswith("R:") else ""
-                            if w_lat_part and r_lat_part:
-                                if mixed_phase_started:
-                                    latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
-                                else:
-                                    latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
-                            elif r_lat_part:
-                                latency_line_styled = f"Latency {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
-                            else:
-                                latency_line_styled = f"Latency {lat_line}"
-                        elif "R:" in lat_line:
-                            latency_line_styled = f"Latency {style(lat_line, ANSI_BOLD, ANSI_GREEN)}"
-                        else:
-                            latency_line_styled = f"Latency {lat_line}"
-                    else:
-                        # В фазе записи: подсвечиваем W: зелёным, R: без стилей
-                        if "W:" in lat_line and "R:" in lat_line:
-                            parts = lat_line.split(" | ")
-                            w_lat_part = parts[0] if parts[0].startswith("W:") else ""
-                            r_lat_part = parts[1] if len(parts) > 1 and parts[1].startswith("R:") else ""
-                            if w_lat_part and r_lat_part:
-                                latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_GREEN)} | {r_lat_part}"
-                            elif w_lat_part:
-                                latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_GREEN)}"
-                            else:
-                                latency_line_styled = f"Latency {lat_line}"
-                        elif "W:" in lat_line:
-                            latency_line_styled = f"Latency {style(lat_line, ANSI_BOLD, ANSI_GREEN)}"
-                        else:
-                            latency_line_styled = f"Latency {lat_line}"
-                else:
-                    latency_line_styled = f"Latency {lat_line}"
-                plain_lines.append(f"Latency {lat_line}")
-                styled_lines.append((latency_line_styled, (ANSI_DIM,), False))
                 interior_width = max(visible_len(line) for line in plain_lines)
                 border = "+" + "-" * (interior_width + 2) + "+"
                 speed_border = "|" + style("=" * (interior_width + 2), ANSI_BOLD, ANSI_CYAN) + "|"
@@ -1228,7 +1265,7 @@ def run_profile(args):
                         render_lines.append(speed_border)
                     # Если коды пустые, значит строка уже стилизована (например, заголовок со спиннером)
                     if codes:
-                        colored = style(plain, *codes)
+                    colored = style(plain, *codes)
                     else:
                         colored = plain  # Уже стилизована
                     padding = " " * (interior_width - visible_len(plain))
@@ -1241,13 +1278,13 @@ def run_profile(args):
                     first_frame = False
                 else:
                     if USE_COLORS:
-                        sys.stdout.write(f"\x1b[{table_height}A")
+                    sys.stdout.write(f"\x1b[{table_height}A")
                     else:
                         # На Windows без поддержки ANSI просто выводим разделитель
                         sys.stdout.write("\n" + "=" * 100 + "\n")
                 for line in render_lines:
                     if USE_COLORS:
-                        sys.stdout.write("\x1b[2K")
+                    sys.stdout.write("\x1b[2K")
                     sys.stdout.write(line + "\n")
                 sys.stdout.flush()
                 last_print = now
