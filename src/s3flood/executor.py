@@ -1278,7 +1278,7 @@ def run_profile(args):
                     first_frame = False
                 else:
                     if USE_COLORS:
-                    sys.stdout.write(f"\x1b[{table_height}A")
+                        sys.stdout.write(f"\x1b[{table_height}A")
                     else:
                         # На Windows без поддержки ANSI просто выводим разделитель
                         sys.stdout.write("\n" + "=" * 100 + "\n")
