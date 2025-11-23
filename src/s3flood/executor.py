@@ -975,7 +975,7 @@ def run_profile(args):
                                 if mixed_phase_started:
                                     latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                                 else:
-                                latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
+                                    latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                             elif r_lat_part:
                                 latency_line_styled = f"Latency {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                             else:
@@ -1048,13 +1048,13 @@ def run_profile(args):
                     first_frame = False
                 else:
                     if USE_COLORS:
-                    sys.stdout.write(f"\x1b[{table_height}A")
+                        sys.stdout.write(f"\x1b[{table_height}A")
                     else:
                         # На Windows без поддержки ANSI просто выводим разделитель
                         sys.stdout.write("\n" + "=" * 100 + "\n")
                 for line in render_lines:
                     if USE_COLORS:
-                    sys.stdout.write("\x1b[2K")
+                        sys.stdout.write("\x1b[2K")
                     sys.stdout.write(line + "\n")
                 sys.stdout.flush()
                 last_print = now
