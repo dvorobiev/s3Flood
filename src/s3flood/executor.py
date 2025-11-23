@@ -40,7 +40,8 @@ def get_spinner():
     with spinner_lock:
         frame = SPINNER_FRAMES[spinner_index]
         spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
-        # Делаем спиннер белым и жирным для лучшей видимости, добавляем пробел для разделения
+        # Делаем спиннер белым и жирным для лучшей видимости
+        # Добавляем пробел после спиннера и используем обрамление для лучшей видимости
         return style(frame, ANSI_BOLD) + " "
 
 
@@ -635,7 +636,19 @@ def run_profile(args):
 
     def worker():
         nonlocal active_uploads, active_downloads, files_in_current_cycle
+        # Для bursty режима в mixed профиле: дополнительные потоки работают только во время всплеска
+        current_thread_id = threading.get_ident()
+        is_extra_thread = current_thread_id in extra_thread_ids if pattern == "bursty" and profile == "mixed-70-30" else False
+        
         while not stop.is_set():
+            # Для дополнительных потоков в bursty режиме: работаем только во время всплеска
+            if is_extra_thread:
+                with pattern_lock:
+                    if not burst_active:
+                        # Во время паузы дополнительные потоки ждут
+                        time.sleep(0.1)
+                        continue
+            
             try:
                 op, job = q.get(timeout=0.5)
             except queue.Empty:
@@ -767,9 +780,27 @@ def run_profile(args):
             q.task_done()
 
     threads = []
-    for _ in range(args.threads):
+    threads_lock = threading.Lock()
+    max_threads = args.threads
+    if pattern == "bursty" and profile == "mixed-70-30":
+        # Для bursty режима в mixed профиле создаем максимальное количество потоков
+        max_threads = int(args.threads * burst_intensity_multiplier)
+    
+    # Создаем базовые потоки
+    base_threads = args.threads
+    for _ in range(base_threads):
         t = threading.Thread(target=worker, daemon=True)
-        t.start(); threads.append(t)
+        t.start()
+        threads.append(t)
+    
+    # Для bursty режима в mixed профиле создаем дополнительные потоки
+    extra_thread_ids = set()
+    if pattern == "bursty" and profile == "mixed-70-30":
+        for _ in range(max_threads - base_threads):
+            t = threading.Thread(target=worker, daemon=True)
+            t.start()
+            extra_thread_ids.add(t.ident)
+            threads.append(t)
 
     last_print = 0
     first_frame = True
