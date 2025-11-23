@@ -1049,15 +1049,23 @@ def run_profile(args):
                 # Для фазы чтения или mixed: учитываем активные операции и pending
                 if profile == "read":
                     # Для read профиля показываем только чтение
-                    # В бесконечном режиме показываем общее количество прочитанных объектов
+                    phase_info = " [READ]"
                     if getattr(args, "infinite", False):
-                        # Показываем общее количество прочитанных объектов
-                        read_pct = 0.0  # В бесконечном режиме процент не имеет смысла
-                        phase_info = " [READ]"
+                        # В бесконечном режиме показываем общее количество прочитанных объектов
+                        r_part = f"R:{files_read} objects read"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part} | Total in bucket: {total_files}"
+                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part} | Total in bucket: {total_files}"
                     else:
                         files_in_progress_read = files_read + active_downloads_snap
                         read_pct = (files_in_progress_read / total_files * 100) if total_files > 0 else 0.0
-                        phase_info = " [READ]"
+                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part}"
+                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
+                    files_color = ()  # Без общего цвета строки
                 elif download_phase_started or mixed_phase_started:
                     with uploaded_objects_lock:
                         total_to_read = len(uploaded_objects)
@@ -1077,23 +1085,6 @@ def run_profile(args):
                     files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
                     # Создаём стилизованную версию: подсвечиваем R: зелёным, W: без стилей, ошибки красным
                     files_line_styled = f"Files {w_part} {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {w_bytes_part} {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
-                    files_color = ()  # Без общего цвета строки
-                elif profile == "read":
-                    # Для read профиля показываем только чтение
-                    if getattr(args, "infinite", False):
-                        # В бесконечном режиме показываем общее количество прочитанных объектов
-                        r_part = f"R:{files_read} objects read"
-                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                        err_part = f"Err {files_err}"
-                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part} | Total in bucket: {total_files}"
-                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part} | Total in bucket: {total_files}"
-                    else:
-                        read_pct = (files_read / total_files * 100) if total_files > 0 else 0.0
-                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                        err_part = f"Err {files_err}"
-                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part}"
-                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
                 else:
                     read_pct = 0.0
