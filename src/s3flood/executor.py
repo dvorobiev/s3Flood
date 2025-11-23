@@ -1038,10 +1038,12 @@ def run_profile(args):
                 with cycle_lock:
                     cycle_info = f" | cycle {cycle_count}" if getattr(args, "infinite", False) else ""
                 # Спиннер крутится всегда, пока программа работает (пока есть потоки или задачи)
-                spinner = get_spinner()  # Всегда крутится, пока программа работает
-                header = f"{spinner} S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
-                plain_lines.append(header)
-                styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
+                spinner = get_spinner()  # Всегда крутится, пока программа работает (уже с цветом)
+                header_text = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
+                header_plain = f"{spinner} {header_text}"
+                header_styled = f"{spinner} {style(header_text, ANSI_BOLD, ANSI_CYAN)}"
+                plain_lines.append(header_plain)
+                styled_lines.append((header_styled, (), False))  # Используем стилизованную версию, спиннер уже имеет цвет
                 # Для фазы чтения или mixed: учитываем активные операции и pending
                 if profile == "read":
                     # Для read профиля показываем только чтение
@@ -1191,7 +1193,11 @@ def run_profile(args):
                 for plain, codes, accent in styled_lines:
                     if accent:
                         render_lines.append(speed_border)
-                    colored = style(plain, *codes)
+                    # Если коды пустые, значит строка уже стилизована (например, заголовок со спиннером)
+                    if codes:
+                        colored = style(plain, *codes)
+                    else:
+                        colored = plain  # Уже стилизована
                     padding = " " * (interior_width - visible_len(plain))
                     render_lines.append(f"| {colored}{padding} |")
                     if accent:
