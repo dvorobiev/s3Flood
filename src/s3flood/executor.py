@@ -147,7 +147,7 @@ class Metrics:
         dur = max(time.time() - self._start, 1e-6)
         
         # Вычисляем реальное время выполнения для каждой фазы
-        # Для последовательных фаз (write-heavy, read-heavy) вычисляем время каждой фазы отдельно
+        # Для write и read профилей - одна фаза (только запись или только чтение)
         # Для смешанных фаз (mixed) операции могут идти параллельно, используем общее время
         write_duration = 0.0
         read_duration = 0.0
@@ -240,6 +240,34 @@ def aws_cp_upload(
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
+def aws_list_objects(
+    bucket: str,
+    endpoint: str,
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+):
+    """Получает список объектов из бакета через s3api list-objects-v2."""
+    env = _get_aws_env(access_key, secret_key, aws_profile)
+    bucket_name = bucket.replace("s3://", "").split("/")[0]
+    cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket_name, "--endpoint-url", endpoint]
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if res.returncode != 0:
+        return None
+    try:
+        data = json.loads(res.stdout)
+        objects = []
+        if "Contents" in data:
+            for obj in data["Contents"]:
+                objects.append({
+                    "key": obj["Key"],
+                    "size": obj.get("Size", 0),
+                })
+        return objects
+    except (json.JSONDecodeError, KeyError):
+        return None
 
 
 def aws_cp_download(
@@ -336,37 +364,103 @@ def gather_files(root: Path):
 
 
 def run_profile(args):
-    data_root = Path(args.data_dir).resolve()
-    if not data_root.exists():
-        print(f"Data dir not found: {data_root}")
-        return
-
-    files = gather_files(data_root)
-    if not files:
-        print(f"No dataset files found under {data_root}")
-        return
-
-    try:
-        files.sort(key=lambda p: p.stat().st_size)
+    profile = getattr(args, "profile", "write")
+    order = getattr(args, "order", "sequential")
+    
+    # Для read профиля получаем список объектов из бакета
+    if profile == "read":
+        endpoints_list = list(getattr(args, "endpoints", []) or [])
+        if not endpoints_list:
+            maybe_single = getattr(args, "endpoint", None)
+            if maybe_single:
+                endpoints_list = [maybe_single]
+        if not endpoints_list:
+            print("No endpoint configured for read profile")
+            return
+        
+        primary_endpoint = endpoints_list[0]
+        print(f"Fetching object list from bucket {args.bucket}...")
+        objects = aws_list_objects(
+            args.bucket,
+            primary_endpoint,
+            getattr(args, "access_key", None),
+            getattr(args, "secret_key", None),
+            getattr(args, "aws_profile", None),
+        )
+        if not objects:
+            print(f"No objects found in bucket {args.bucket}")
+            return
+        
+        # Создаём jobs из объектов бакета
         jobs: list[Job] = []
         groups = {}
-        total_files = len(files)
+        total_files = len(objects)
         total_bytes = 0
-        for p in files:
-            size = p.stat().st_size
-            rel = p.relative_to(data_root)
-            group = rel.parts[0] if rel.parts else "root"
-            jobs.append(Job(path=p, size=size, group=group))
+        for obj in objects:
+            key = obj["key"]
+            size = obj["size"]
+            # Определяем группу по размеру (аналогично файлам)
+            if size < 100 * 1024 * 1024:  # < 100MB
+                group = "small"
+            elif size < 1024 * 1024 * 1024:  # < 1GB
+                group = "medium"
+            else:
+                group = "large"
+            # Для read профиля path не используется, но нужен для совместимости с Job
+            fake_path = Path(key)
+            jobs.append(Job(path=fake_path, size=size, group=group))
             total_bytes += size
             grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
             grp["total_files"] += 1
             grp["total_bytes"] += size
-        jobs.sort(key=lambda j: j.size)
+        
+        # Сортировка по порядку
+        if order == "sequential":
+            jobs.sort(key=lambda j: j.size)  # Маленькие → средние → большие
+        else:  # random
+            random.shuffle(jobs)
+        
         group_summary = ", ".join(f"{g}={info['total_files']}" for g, info in groups.items())
-        print(f"Loaded {total_files} files totalling {total_bytes/1024/1024:.1f} MB across groups: {group_summary}")
-    except OSError as e:
-        print(f"Failed to stat dataset files: {e}")
-        return
+        print(f"Loaded {total_files} objects totalling {total_bytes/1024/1024:.1f} MB from bucket across groups: {group_summary}")
+    else:
+        # Для write и mixed профилей используем файлы из data_dir
+        data_root = Path(args.data_dir).resolve()
+        if not data_root.exists():
+            print(f"Data dir not found: {data_root}")
+            return
+
+        files = gather_files(data_root)
+        if not files:
+            print(f"No dataset files found under {data_root}")
+            return
+
+        try:
+            files.sort(key=lambda p: p.stat().st_size)
+            jobs: list[Job] = []
+            groups = {}
+            total_files = len(files)
+            total_bytes = 0
+            for p in files:
+                size = p.stat().st_size
+                rel = p.relative_to(data_root)
+                group = rel.parts[0] if rel.parts else "root"
+                jobs.append(Job(path=p, size=size, group=group))
+                total_bytes += size
+                grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
+                grp["total_files"] += 1
+                grp["total_bytes"] += size
+            
+            # Сортировка по порядку
+            if order == "sequential":
+                jobs.sort(key=lambda j: j.size)  # Маленькие → средние → большие
+            else:  # random
+                random.shuffle(jobs)
+            
+            group_summary = ", ".join(f"{g}={info['total_files']}" for g, info in groups.items())
+            print(f"Loaded {total_files} files totalling {total_bytes/1024/1024:.1f} MB across groups: {group_summary}")
+        except OSError as e:
+            print(f"Failed to stat dataset files: {e}")
+            return
 
     endpoints_list = list(getattr(args, "endpoints", []) or [])
     if not endpoints_list:
@@ -397,7 +491,6 @@ def run_profile(args):
     pending_counts = {g: info["total_files"] for g, info in groups.items()}
     
     # Инициализация параметров
-    profile = getattr(args, "profile", "write-heavy")
     mixed_read_ratio = getattr(args, "mixed_read_ratio", 0.7)
     pattern = getattr(args, "pattern", "sustained")
     burst_duration_sec = getattr(args, "burst_duration_sec", 10.0)
@@ -405,9 +498,19 @@ def run_profile(args):
     max_retries = getattr(args, "max_retries", 3)
     retry_backoff_base = getattr(args, "retry_backoff_base", 2.0)
     
-    # Для всех профилей сначала загружаем данные
-    for job in jobs:
-        q.put(("upload", job))
+    # Инициализация очереди в зависимости от профиля
+    if profile == "read":
+        # Для read профиля сразу добавляем задачи на чтение
+        for job in jobs:
+            q.put(("download", job))
+    elif profile == "write":
+        # Для write профиля добавляем задачи на запись
+        for job in jobs:
+            q.put(("upload", job))
+    elif profile == "mixed-70-30":
+        # Для mixed профиля сначала загружаем данные
+        for job in jobs:
+            q.put(("upload", job))
     metrics = Metrics(args.metrics, args.report)
 
     stop = threading.Event()
@@ -433,9 +536,14 @@ def run_profile(args):
             try:
                 op, job = q.get(timeout=0.5)
             except queue.Empty:
-                # Если upload фаза завершена и очередь пуста, завершаем worker
-                if upload_phase_done.is_set() and q.empty():
-                    break
+                # Для write и read профилей: если очередь пуста, завершаем worker
+                # Для mixed профиля: если upload фаза завершена и очередь пуста, завершаем worker
+                if profile == "mixed-70-30":
+                    if upload_phase_done.is_set() and q.empty():
+                        break
+                else:
+                    if q.empty() and not getattr(args, "infinite", False):
+                        break
                 if not getattr(args, "infinite", False):
                     continue
                 else:
@@ -483,6 +591,12 @@ def run_profile(args):
                     with group_lock:
                         groups[job.group]["errors"] += 1
             elif op == "download":
+                # Для read профиля используем key из path (который содержит имя объекта)
+                # Для других профилей используем path.name
+                if profile == "read":
+                    key = str(job.path)  # Для read профиля path содержит key объекта
+                else:
+                    key = job.path.name
                 # Используем endpoint из job, если он был сохранён при записи, иначе выбираем новый
                 endpoint = job.endpoint if job.endpoint else next_endpoint()
                 # Используем retry с backoff
@@ -491,7 +605,7 @@ def run_profile(args):
                     max_retries,
                     retry_backoff_base,
                     args.bucket,
-                    job.path.name,
+                    key,
                     endpoint,
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
@@ -554,23 +668,15 @@ def run_profile(args):
     first_frame = True
     download_phase_started = False
     mixed_phase_started = False
-    key_to_job = {job.path.name: job for job in jobs}
+    # Для read профиля используем key из path, для других - path.name
+    if profile == "read":
+        key_to_job = {str(job.path): job for job in jobs}  # path содержит key объекта
+    else:
+        key_to_job = {job.path.name: job for job in jobs}
     
     def start_read_phase():
-        """Запускает фазу чтения для read-heavy или write-heavy профилей."""
-        nonlocal download_phase_started
-        with uploaded_objects_lock:
-            if uploaded_objects:
-                download_phase_started = True
-                for key, endpoint in uploaded_objects.items():
-                    if key in key_to_job:
-                        job = key_to_job[key]
-                        job.endpoint = endpoint  # Устанавливаем endpoint из словаря
-                        try:
-                            q.put(("download", job), block=False)
-                        except queue.Full:
-                            pass  # Очередь полна, попробуем позже
-                upload_phase_done.set()
+        """Запускает фазу чтения для старых профилей (больше не используется)."""
+        pass  # Удалено, так как read профиль работает напрямую
     
     def start_mixed_phase():
         """Запускает смешанную фазу для mixed профиля."""
@@ -631,11 +737,11 @@ def run_profile(args):
                 upload_active = active_uploads
             
             # Переключение фаз в зависимости от профиля
+            # Для write профиля - только запись, фаза чтения не запускается
+            # Для read профиля - только чтение, фаза записи не нужна
             if not download_phase_started and not mixed_phase_started:
                 if upload_pending == 0 and upload_active == 0:
-                    if profile == "write-heavy" or profile == "read-heavy":
-                        start_read_phase()
-                    elif profile == "mixed-70-30":
+                    if profile == "mixed-70-30":
                         start_mixed_phase()
             
             # Для mixed профиля: добавляем новые задачи в смешанном режиме
@@ -672,7 +778,11 @@ def run_profile(args):
                 files_done = metrics.write_ops_ok
                 files_read = metrics.read_ops_ok
                 files_err = metrics.err_ops
-                files_left = max(total_files - files_done - files_err, 0)
+                # Для read профиля считаем оставшиеся файлы по чтению, для других - по записи
+                if profile == "read":
+                    files_left = max(total_files - files_read - files_err, 0)
+                else:
+                    files_left = max(total_files - files_done - files_err, 0)
                 avg_wbps = metrics.avg_write_rate()
                 avg_rbps = metrics.avg_read_rate()
                 with active_lock:
@@ -696,7 +806,14 @@ def run_profile(args):
                 
                 # ETA: для фазы записи или чтения
                 eta_sec = None
-                if download_phase_started or mixed_phase_started:
+                if profile == "read":
+                    # Для read профиля: считаем ETA по оставшимся файлам для чтения
+                    files_left_read = max(total_files - files_read, 0)
+                    if rbps > 1 and files_left_read > 0:
+                        avg_file_size = bytes_read / files_read if files_read > 0 else (total_bytes / total_files if total_files > 0 else 0)
+                        bytes_left_read = avg_file_size * files_left_read
+                        eta_sec = bytes_left_read / rbps
+                elif download_phase_started or mixed_phase_started:
                     # В фазе чтения или mixed: считаем ETA по оставшимся файлам для чтения
                     with uploaded_objects_lock:
                         total_to_read = len(uploaded_objects)
@@ -714,7 +831,14 @@ def run_profile(args):
                 
                 # Показываем последнюю операцию (upload или download)
                 last_info = "n/a"
-                if download_phase_started or mixed_phase_started:
+                if profile == "read":
+                    # Для read профиля показываем только чтение
+                    last_download = metrics.last_download
+                    if last_download:
+                        last_size_mb = last_download["bytes"] / 1024 / 1024
+                        last_dur = last_download["lat_ms"] / 1000
+                        last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
+                elif download_phase_started or mixed_phase_started:
                     # В mixed фазе показываем последнюю операцию (может быть и read, и write)
                     last_download = metrics.last_download
                     last_upload = metrics.last_upload
@@ -759,7 +883,12 @@ def run_profile(args):
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
                 # Для фазы чтения или mixed: учитываем активные операции и pending
-                if download_phase_started or mixed_phase_started:
+                if profile == "read":
+                    # Для read профиля показываем только чтение
+                    files_in_progress_read = files_read + active_downloads_snap
+                    read_pct = (files_in_progress_read / total_files * 100) if total_files > 0 else 0.0
+                    phase_info = " [READ]"
+                elif download_phase_started or mixed_phase_started:
                     with uploaded_objects_lock:
                         total_to_read = len(uploaded_objects)
                     files_in_progress_read = files_read + active_downloads_snap
@@ -778,6 +907,17 @@ def run_profile(args):
                     files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
                     # Создаём стилизованную версию: подсвечиваем R: зелёным, W: без стилей, ошибки красным
                     files_line_styled = f"Files {w_part} {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {w_bytes_part} {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
+                    files_color = ()  # Без общего цвета строки
+                elif profile == "read":
+                    # Для read профиля показываем только чтение
+                    read_pct = (files_read / total_files * 100) if total_files > 0 else 0.0
+                    phase_info = " [READ]"
+                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                    err_part = f"Err {files_err}"
+                    files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part}"
+                    # Создаём стилизованную версию: подсвечиваем R: зелёным, ошибки красным
+                    files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
                 else:
                     read_pct = 0.0
@@ -799,7 +939,12 @@ def run_profile(args):
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
                 
                 # Цветовое выделение для rates
-                if download_phase_started or mixed_phase_started:
+                if profile == "read":
+                    # Для read профиля показываем только чтение
+                    r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
+                    rate_line_plain = f"Rates {r_rates_part} | last {last_info}"
+                    rate_line_styled = f"Rates {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                elif download_phase_started or mixed_phase_started:
                     # В фазе чтения/mixed: подсвечиваем R: зелёным, W: без стилей (или оба, если mixed)
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
                     r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
@@ -830,7 +975,7 @@ def run_profile(args):
                                 if mixed_phase_started:
                                     latency_line_styled = f"Latency {style(w_lat_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                                 else:
-                                    latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
+                                latency_line_styled = f"Latency {w_lat_part} | {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                             elif r_lat_part:
                                 latency_line_styled = f"Latency {style(r_lat_part, ANSI_BOLD, ANSI_GREEN)}"
                             else:
@@ -903,13 +1048,13 @@ def run_profile(args):
                     first_frame = False
                 else:
                     if USE_COLORS:
-                        sys.stdout.write(f"\x1b[{table_height}A")
+                    sys.stdout.write(f"\x1b[{table_height}A")
                     else:
                         # На Windows без поддержки ANSI просто выводим разделитель
                         sys.stdout.write("\n" + "=" * 100 + "\n")
                 for line in render_lines:
                     if USE_COLORS:
-                        sys.stdout.write("\x1b[2K")
+                    sys.stdout.write("\x1b[2K")
                     sys.stdout.write(line + "\n")
                 sys.stdout.flush()
                 last_print = now

@@ -18,7 +18,7 @@ def main():
 
     runp = sub.add_parser("run", help="Запустить нагрузочный тест S3")
     runp.add_argument("--config", help="YAML-файл с параметрами запуска (endpoint, bucket, креденшлы). Все параметры из конфига можно переопределить через CLI")
-    runp.add_argument("--profile", choices=["write-heavy","read-heavy","mixed-70-30"], default=None, help="Профиль нагрузки: write-heavy (запись+чтение), read-heavy (запись затем чтение), mixed-70-30 (смешанные операции)")
+    runp.add_argument("--profile", choices=["write","read","mixed-70-30"], default=None, help="Профиль нагрузки: write (только запись), read (только чтение из бакета), mixed-70-30 (смешанные операции)")
     runp.add_argument("--client", choices=["awscli","rclone","s3cmd"], default=None, help="S3 клиент для использования (по умолчанию: awscli)")
     runp.add_argument("--endpoint", default=None, help="URL S3 endpoint (например, http://localhost:9000 для MinIO)")
     runp.add_argument("--endpoints", nargs="+", default=None, help="Список endpoint'ов для кластерного режима (например: http://node1:9000 http://node2:9000)")
@@ -39,6 +39,7 @@ def main():
     runp.add_argument("--queue-limit", type=int, dest="queue_limit", default=None, help="Максимальный размер очереди операций (по умолчанию: без ограничений)")
     runp.add_argument("--max-retries", type=int, dest="max_retries", default=None, help="Максимальное количество повторов при ошибке (по умолчанию: 3)")
     runp.add_argument("--retry-backoff-base", type=float, dest="retry_backoff_base", default=None, help="Базовый множитель для экспоненциального backoff при повторах (по умолчанию: 2.0, т.е. задержки: 1s, 2s, 4s)")
+    runp.add_argument("--order", choices=["sequential","random"], default=None, help="Порядок обработки файлов: sequential (сначала маленькие, потом средние, потом большие) или random (случайный порядок)")
 
     args = parser.parse_args()
 

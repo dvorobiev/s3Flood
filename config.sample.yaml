@@ -1,6 +1,6 @@
 # Пример конфига запуска s3flood. Скопируйте в config.local.yaml и подставьте свои значения.
 run:
-  profile: write-heavy
+  profile: write
   client: awscli
   # Один endpoint...
   endpoint: "http://192.168.20.35:9080"
@@ -30,4 +30,6 @@ run:
   # queue_limit: 1000  # Максимальный размер очереди операций
   # max_retries: 3  # Количество повторов при ошибке
   # retry_backoff_base: 2.0  # Базовый множитель для экспоненциального backoff
+  # Порядок обработки файлов
+  # order: sequential  # sequential (сначала маленькие) или random (случайный порядок)
 

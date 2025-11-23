@@ -22,7 +22,7 @@ cd s3Flood
 4. Запускайте:
    ```powershell
    .\s3flood.bat dataset-create --path .\loadset --target-bytes 1GB
-   .\s3flood.bat run --profile write-heavy --endpoint http://localhost:9000 --bucket test
+   .\s3flood.bat run --profile write --endpoint http://localhost:9000 --bucket test
    ```
 
 > Совет: используйте `--group-limits` ≤5GB для защиты от ошибок `BadDigest` на некоторых S3-бэкендах.
@@ -36,7 +36,7 @@ cd s3Flood
 
 **Запустить тест:**
 ```bash
-./s3flood run --profile write-heavy --endpoint http://localhost:9000 --bucket test --access-key minioadmin --secret-key minioadmin --data-dir ./loadset/data
+./s3flood run --profile write --endpoint http://localhost:9000 --bucket test --access-key minioadmin --secret-key minioadmin --data-dir ./loadset/data
 ```
 
 Результаты: `metrics.csv` (детальные метрики) и `report.json` (итоговый отчёт).
@@ -51,7 +51,7 @@ docker run -d --name minio -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=minioadm
 ./s3flood dataset-create --path ./loadset --target-bytes 1GB
 
 # 3. Запустить тест
-./s3flood run --profile write-heavy --endpoint http://localhost:9000 --bucket test --access-key minioadmin --secret-key minioadmin --data-dir ./loadset/data
+./s3flood run --profile write --endpoint http://localhost:9000 --bucket test --access-key minioadmin --secret-key minioadmin --data-dir ./loadset/data
 ```
 
 **Использование конфига:**
@@ -59,9 +59,13 @@ docker run -d --name minio -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=minioadm
 
 ### Профили нагрузки
 
-- `write-heavy`: сначала запись всех файлов, затем автоматическое чтение
-- `read-heavy`: сначала запись всех файлов, затем интенсивное чтение
+- `write`: только запись файлов из датасета в бакет
+- `read`: только чтение объектов из бакета (в `/dev/null`, без нагрузки на диск)
 - `mixed-70-30`: смешанные операции (70% чтение, 30% запись, настраивается через `mixed_read_ratio`)
+
+**Порядок обработки файлов:**
+- `--order sequential` (по умолчанию): сначала маленькие файлы, потом средние, потом большие
+- `--order random`: случайный порядок обработки файлов
 
 ### Паттерны нагрузки
 

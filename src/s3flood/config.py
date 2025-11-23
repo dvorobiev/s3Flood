@@ -54,6 +54,8 @@ class RunConfigModel(BaseModel):
     queue_limit: Optional[int] = Field(default=None, gt=0)
     max_retries: Optional[int] = Field(default=None, ge=0)
     retry_backoff_base: Optional[float] = Field(default=None, gt=1.0)
+    # Порядок обработки файлов
+    order: Optional[str] = None  # sequential | random
 
 
 @dataclass
@@ -79,6 +81,7 @@ class RunSettings:
     queue_limit: Optional[int]
     max_retries: Optional[int]
     retry_backoff_base: Optional[float]
+    order: Optional[str]
 
     def to_namespace(self) -> Namespace:
         return Namespace(**asdict(self))
@@ -162,6 +165,9 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     queue_limit = pick("queue_limit")
     max_retries = pick("max_retries", default=3)
     retry_backoff_base = pick("retry_backoff_base", default=2.0)
+    
+    # Порядок обработки файлов
+    order = pick("order", default="sequential")
 
     return RunSettings(
         profile=profile,
@@ -185,5 +191,6 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         queue_limit=queue_limit,
         max_retries=max_retries,
         retry_backoff_base=retry_backoff_base,
+        order=order,
     )
 
