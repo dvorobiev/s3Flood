@@ -29,19 +29,19 @@ ANSI_CYAN = "\x1b[36m" if USE_COLORS else ""
 
 ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
 
-# Спиннер для индикации активности - используем более заметные символы
-SPINNER_FRAMES = ["◐", "◓", "◑", "◒"]
+# Спиннер для индикации активности
+SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 spinner_index = 0
 spinner_lock = threading.Lock()
 
 def get_spinner():
-    """Возвращает следующий кадр спиннера с цветом, обновляя его при каждом вызове."""
+    """Возвращает следующий кадр спиннера с белым цветом, обновляя его при каждом вызове."""
     global spinner_index
     with spinner_lock:
         frame = SPINNER_FRAMES[spinner_index]
         spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
-        # Делаем спиннер ярким и заметным - используем желтый/зеленый цвет
-        return style(frame, ANSI_BOLD, ANSI_YELLOW)
+        # Делаем спиннер белым и жирным для лучшей видимости
+        return style(frame, ANSI_BOLD)
 
 
 def visible_len(s: str) -> int:
