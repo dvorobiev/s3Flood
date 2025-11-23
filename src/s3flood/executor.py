@@ -1059,7 +1059,7 @@ def run_profile(args):
                     if profile == "read":
                         files_left = max(total_files - files_read - files_err, 0)
                     else:
-                files_left = max(total_files - files_done - files_err, 0)
+                        files_left = max(total_files - files_done - files_err, 0)
                 avg_wbps = metrics.avg_write_rate()
                 avg_rbps = metrics.avg_read_rate()
                 with active_lock:
