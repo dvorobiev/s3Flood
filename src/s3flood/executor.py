@@ -619,7 +619,7 @@ def run_profile(args):
     cycle_files_lock = threading.Lock()
 
     def worker():
-        nonlocal active_uploads, active_downloads
+        nonlocal active_uploads, active_downloads, files_in_current_cycle
         while not stop.is_set():
             try:
                 op, job = q.get(timeout=0.5)
