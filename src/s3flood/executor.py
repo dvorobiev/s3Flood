@@ -176,15 +176,29 @@ class Metrics:
         # Сортируем по размеру
         sorted_by_size = sorted(file_stats.items(), key=lambda x: x[0])
         
-        # ТОП10 маленьких
-        top10_small = sorted_by_size[:10] if len(sorted_by_size) >= 10 else sorted_by_size
+        # ТОП10 маленьких - берем первые 10 самых маленьких
+        # ТОП10 больших - берем последние 10 самых больших
+        # Если уникальных размеров меньше 10, разделяем пополам
+        total_unique_sizes = len(sorted_by_size)
+        if total_unique_sizes <= 1:
+            # Если только один размер, оба списка одинаковые
+            top10_small = sorted_by_size
+            top10_large = sorted_by_size
+        elif total_unique_sizes <= 10:
+            # Если размеров <= 10, разделяем пополам (маленькие и большие)
+            mid = total_unique_sizes // 2
+            top10_small = sorted_by_size[:mid] if mid > 0 else sorted_by_size[:1]
+            top10_large = sorted_by_size[mid:] if mid < total_unique_sizes else sorted_by_size[-1:]
+        else:
+            # Если размеров > 10, берем первые 10 и последние 10
+            top10_small = sorted_by_size[:10]
+            top10_large = sorted_by_size[-10:]
+        
         small_stats = []
         for size_bytes, stats in top10_small:
             avg_speed = statistics.mean(stats["speeds"]) if stats["speeds"] else 0.0
             small_stats.append((size_bytes, stats["count"], avg_speed))
         
-        # ТОП10 больших
-        top10_large = sorted_by_size[-10:] if len(sorted_by_size) >= 10 else sorted_by_size
         large_stats = []
         for size_bytes, stats in top10_large:
             avg_speed = statistics.mean(stats["speeds"]) if stats["speeds"] else 0.0
