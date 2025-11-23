@@ -633,9 +633,12 @@ def run_profile(args):
     # Отслеживание файлов в текущем цикле для infinite режима
     files_in_current_cycle = 0
     cycle_files_lock = threading.Lock()
+    
+    # Для bursty режима в mixed профиле: инициализируем множество ID дополнительных потоков
+    extra_thread_ids = set()
 
     def worker():
-        nonlocal active_uploads, active_downloads, files_in_current_cycle
+        nonlocal active_uploads, active_downloads, files_in_current_cycle, extra_thread_ids
         # Для bursty режима в mixed профиле: дополнительные потоки работают только во время всплеска
         current_thread_id = threading.get_ident()
         is_extra_thread = current_thread_id in extra_thread_ids if pattern == "bursty" and profile == "mixed-70-30" else False
@@ -794,7 +797,6 @@ def run_profile(args):
         threads.append(t)
     
     # Для bursty режима в mixed профиле создаем дополнительные потоки
-    extra_thread_ids = set()
     if pattern == "bursty" and profile == "mixed-70-30":
         for _ in range(max_threads - base_threads):
             t = threading.Thread(target=worker, daemon=True)
