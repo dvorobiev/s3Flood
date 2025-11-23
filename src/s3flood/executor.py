@@ -33,18 +33,13 @@ ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 spinner_index = 0
 spinner_lock = threading.Lock()
-spinner_last_update = 0.0
 
 def get_spinner():
-    """Возвращает следующий кадр спиннера, обновляя его каждые 0.2 секунды."""
-    global spinner_index, spinner_last_update
-    now = time.time()
+    """Возвращает следующий кадр спиннера, обновляя его при каждом вызове."""
+    global spinner_index
     with spinner_lock:
-        # Обновляем спиннер каждые 0.2 секунды для плавной анимации
-        if now - spinner_last_update >= 0.2:
-            spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
-            spinner_last_update = now
         frame = SPINNER_FRAMES[spinner_index]
+        spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
         return frame
 
 
@@ -924,7 +919,7 @@ def run_profile(args):
                                     except queue.Full:
                                         break
             
-            if now - last_print >= 2.0:
+            if now - last_print >= 0.5:  # Обновляем дашборд каждые 0.5 секунды для плавной анимации спиннера
                 rbps, wbps, ops_per_sec = metrics.current_rates(5.0)
                 files_done = metrics.write_ops_ok
                 files_read = metrics.read_ops_ok
