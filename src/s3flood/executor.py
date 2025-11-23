@@ -40,8 +40,8 @@ def get_spinner():
     with spinner_lock:
         frame = SPINNER_FRAMES[spinner_index]
         spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
-        # Делаем спиннер белым и жирным для лучшей видимости
-        return style(frame, ANSI_BOLD)
+        # Делаем спиннер белым и жирным для лучшей видимости, добавляем пробел для разделения
+        return style(frame, ANSI_BOLD) + " "
 
 
 def visible_len(s: str) -> int:
@@ -1038,10 +1038,10 @@ def run_profile(args):
                 with cycle_lock:
                     cycle_info = f" | cycle {cycle_count}" if getattr(args, "infinite", False) else ""
                 # Спиннер крутится всегда, пока программа работает (пока есть потоки или задачи)
-                spinner = get_spinner()  # Всегда крутится, пока программа работает (уже с цветом)
+                spinner = get_spinner()  # Всегда крутится, пока программа работает (уже с цветом и пробелом)
                 header_text = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
-                header_plain = f"{spinner} {header_text}"
-                header_styled = f"{spinner} {style(header_text, ANSI_BOLD, ANSI_CYAN)}"
+                header_plain = f"{spinner}{header_text}"  # Пробел уже в спиннере
+                header_styled = f"{spinner}{style(header_text, ANSI_BOLD, ANSI_CYAN)}"  # Пробел уже в спиннере
                 plain_lines.append(header_plain)
                 styled_lines.append((header_styled, (), False))  # Используем стилизованную версию, спиннер уже имеет цвет
                 # Для фазы чтения или mixed: учитываем активные операции и pending
