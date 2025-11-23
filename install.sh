@@ -187,7 +187,7 @@ main() {
     echo ""
     echo "Использование:"
     echo "  ./s3flood dataset-create --path ./loadset --use-symlinks"
-    echo "  ./s3flood run --profile write-heavy --endpoint http://localhost:9000 --bucket test-bucket"
+    echo "  ./s3flood run --profile write --endpoint http://localhost:9000 --bucket test-bucket"
     echo ""
     echo "Или через Python модуль:"
     echo "  source .venv/bin/activate"

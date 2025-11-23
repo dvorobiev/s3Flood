@@ -113,7 +113,7 @@ s3flood Portable для Windows
 3. Запускайте команды через s3flood.bat:
 
    s3flood.bat dataset-create --path .\loadset --target-bytes 5GB
-   s3flood.bat run --profile write-heavy --endpoint http://localhost:9000 --bucket test
+   s3flood.bat run --profile write --endpoint http://localhost:9000 --bucket test
 
 Или напрямую через Python:
    venv\Scripts\python.exe -m s3flood --help

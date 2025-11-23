@@ -65,14 +65,14 @@ jobs:
         run: |
           python -m s3flood dataset-create --path ./loadset --use-symlinks --min-counts 5,3,1 --group-limits 1MB,2MB,4MB --safety-ratio 0.01
 
-      - name: Run write-heavy profile (smoke)
+      - name: Run write profile (smoke)
         env:
           AWS_ACCESS_KEY_ID: minioadmin
           AWS_SECRET_ACCESS_KEY: minioadmin
           AWS_EC2_METADATA_DISABLED: "true"
         run: |
           python -m s3flood run \
-            --profile write-heavy \
+            --profile write \
             --client awscli \
             --threads 2 \
             --endpoint http://127.0.0.1:9000 \
