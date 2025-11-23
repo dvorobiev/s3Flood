@@ -33,13 +33,18 @@ ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 spinner_index = 0
 spinner_lock = threading.Lock()
+spinner_last_update = 0.0
 
 def get_spinner():
-    """Возвращает следующий кадр спиннера."""
-    global spinner_index
+    """Возвращает следующий кадр спиннера, обновляя его каждые 0.2 секунды."""
+    global spinner_index, spinner_last_update
+    now = time.time()
     with spinner_lock:
+        # Обновляем спиннер каждые 0.2 секунды для плавной анимации
+        if now - spinner_last_update >= 0.2:
+            spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
+            spinner_last_update = now
         frame = SPINNER_FRAMES[spinner_index]
-        spinner_index = (spinner_index + 1) % len(SPINNER_FRAMES)
         return frame
 
 
@@ -855,7 +860,8 @@ def run_profile(args):
                 elif profile == "read":
                     with active_lock:
                         operations_active = active_downloads
-                    operations_pending = pending
+                    with pending_lock:
+                        operations_pending = q.qsize()
                 
                 if operations_pending == 0 and operations_active == 0:
                     if profile == "mixed-70-30":
