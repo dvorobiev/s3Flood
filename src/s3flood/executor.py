@@ -1183,7 +1183,7 @@ def run_profile(args):
                     if mixed_phase_started:
                         phase_info = " [MIXED]"
                     else:
-                    phase_info = " [READ]"
+                        phase_info = " [READ]"
                     # В фазе чтения/mixed: подсвечиваем данные чтения (R:) зелёным, W: без стилей
                     # Разделяем на части для цветового выделения
                     w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
