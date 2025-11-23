@@ -142,6 +142,48 @@ class Metrics:
         p90_idx = max(int(len(data) * 0.9) - 1, 0)
         p95_idx = max(int(len(data) * 0.95) - 1, 0)
         return median, data[p90_idx], data[p95_idx]
+    
+    def get_file_stats(self, op_type="upload"):
+        """Возвращает статистику по файлам: ТОП10 больших, ТОП10 маленьких, средняя скорость."""
+        file_stats = {}  # key: (bytes, count, total_time_ms, speeds)
+        with self._lock:
+            for op, start, end, nbytes, ok, lat_ms in self.ops:
+                if op == op_type and ok:
+                    if nbytes not in file_stats:
+                        file_stats[nbytes] = {"count": 0, "total_time_ms": 0, "speeds": []}
+                    file_stats[nbytes]["count"] += 1
+                    file_stats[nbytes]["total_time_ms"] += lat_ms
+                    if lat_ms > 0:
+                        speed_mbps = (nbytes / 1024 / 1024) / (lat_ms / 1000)
+                        file_stats[nbytes]["speeds"].append(speed_mbps)
+        
+        if not file_stats:
+            return None, None, None
+        
+        # Сортируем по размеру
+        sorted_by_size = sorted(file_stats.items(), key=lambda x: x[0])
+        
+        # ТОП10 маленьких
+        top10_small = sorted_by_size[:10] if len(sorted_by_size) >= 10 else sorted_by_size
+        small_stats = []
+        for size_bytes, stats in top10_small:
+            avg_speed = statistics.mean(stats["speeds"]) if stats["speeds"] else 0.0
+            small_stats.append((size_bytes, stats["count"], avg_speed))
+        
+        # ТОП10 больших
+        top10_large = sorted_by_size[-10:] if len(sorted_by_size) >= 10 else sorted_by_size
+        large_stats = []
+        for size_bytes, stats in top10_large:
+            avg_speed = statistics.mean(stats["speeds"]) if stats["speeds"] else 0.0
+            large_stats.append((size_bytes, stats["count"], avg_speed))
+        
+        # Средняя скорость по всем файлам
+        all_speeds = []
+        for stats in file_stats.values():
+            all_speeds.extend(stats["speeds"])
+        avg_speed_all = statistics.mean(all_speeds) if all_speeds else 0.0
+        
+        return small_stats, large_stats, avg_speed_all
 
     def finalize(self):
         dur = max(time.time() - self._start, 1e-6)
@@ -529,6 +571,11 @@ def run_profile(args):
     burst_active = False
     burst_start_time = None
     pattern_lock = threading.Lock()
+    
+    # Счетчик циклов для infinite режима
+    cycle_count = 0
+    cycle_lock = threading.Lock()
+    last_cycle_restart = 0.0  # Время последнего перезапуска цикла
 
     def worker():
         nonlocal active_uploads, active_downloads
@@ -740,9 +787,44 @@ def run_profile(args):
             # Для write профиля - только запись, фаза чтения не запускается
             # Для read профиля - только чтение, фаза записи не нужна
             if not download_phase_started and not mixed_phase_started:
-                if upload_pending == 0 and upload_active == 0:
+                # Проверяем завершение операций в зависимости от профиля
+                operations_pending = 0
+                operations_active = 0
+                if profile == "write":
+                    operations_pending = upload_pending
+                    operations_active = upload_active
+                elif profile == "read":
+                    with active_lock:
+                        operations_active = active_downloads
+                    operations_pending = pending
+                
+                if operations_pending == 0 and operations_active == 0:
                     if profile == "mixed-70-30":
                         start_mixed_phase()
+                    elif getattr(args, "infinite", False):
+                        # Бесконечный режим: после завершения всех файлов начинаем новый цикл
+                        # Защита от повторного запуска в течение 1 секунды
+                        if now - last_cycle_restart > 1.0:
+                            if profile == "write":
+                                # Для write профиля добавляем все файлы снова в очередь
+                                with cycle_lock:
+                                    cycle_count += 1
+                                for job in jobs:
+                                    try:
+                                        q.put(("upload", job), block=False)
+                                    except queue.Full:
+                                        pass
+                                last_cycle_restart = now
+                            elif profile == "read":
+                                # Для read профиля добавляем все объекты снова в очередь
+                                with cycle_lock:
+                                    cycle_count += 1
+                                for job in jobs:
+                                    try:
+                                        q.put(("download", job), block=False)
+                                    except queue.Full:
+                                        pass
+                                last_cycle_restart = now
             
             # Для mixed профиля: добавляем новые задачи в смешанном режиме
             if mixed_phase_started and profile == "mixed-70-30":
@@ -778,11 +860,20 @@ def run_profile(args):
                 files_done = metrics.write_ops_ok
                 files_read = metrics.read_ops_ok
                 files_err = metrics.err_ops
-                # Для read профиля считаем оставшиеся файлы по чтению, для других - по записи
-                if profile == "read":
-                    files_left = max(total_files - files_read - files_err, 0)
+                # Для бесконечного режима показываем общее количество обработанных файлов
+                # Для обычного режима показываем оставшиеся файлы
+                if getattr(args, "infinite", False):
+                    # В бесконечном режиме показываем общее количество обработанных файлов
+                    if profile == "read":
+                        files_left = 0  # В бесконечном режиме не считаем оставшиеся
+                    else:
+                        files_left = 0  # В бесконечном режиме не считаем оставшиеся
                 else:
-                    files_left = max(total_files - files_done - files_err, 0)
+                    # Для read профиля считаем оставшиеся файлы по чтению, для других - по записи
+                    if profile == "read":
+                        files_left = max(total_files - files_read - files_err, 0)
+                    else:
+                        files_left = max(total_files - files_done - files_err, 0)
                 avg_wbps = metrics.avg_write_rate()
                 avg_rbps = metrics.avg_read_rate()
                 with active_lock:
@@ -879,15 +970,23 @@ def run_profile(args):
                 plain_lines: list[str] = []
                 styled_lines: list[tuple[str, tuple[str, ...], bool]] = []
                 pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
-                header = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}"
+                with cycle_lock:
+                    cycle_info = f" | cycle {cycle_count}" if getattr(args, "infinite", False) else ""
+                header = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
                 # Для фазы чтения или mixed: учитываем активные операции и pending
                 if profile == "read":
                     # Для read профиля показываем только чтение
-                    files_in_progress_read = files_read + active_downloads_snap
-                    read_pct = (files_in_progress_read / total_files * 100) if total_files > 0 else 0.0
-                    phase_info = " [READ]"
+                    # В бесконечном режиме показываем общее количество прочитанных объектов
+                    if getattr(args, "infinite", False):
+                        # Показываем общее количество прочитанных объектов
+                        read_pct = 0.0  # В бесконечном режиме процент не имеет смысла
+                        phase_info = " [READ]"
+                    else:
+                        files_in_progress_read = files_read + active_downloads_snap
+                        read_pct = (files_in_progress_read / total_files * 100) if total_files > 0 else 0.0
+                        phase_info = " [READ]"
                 elif download_phase_started or mixed_phase_started:
                     with uploaded_objects_lock:
                         total_to_read = len(uploaded_objects)
@@ -910,27 +1009,42 @@ def run_profile(args):
                     files_color = ()  # Без общего цвета строки
                 elif profile == "read":
                     # Для read профиля показываем только чтение
-                    read_pct = (files_read / total_files * 100) if total_files > 0 else 0.0
-                    phase_info = " [READ]"
-                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                    err_part = f"Err {files_err}"
-                    files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part}"
-                    # Создаём стилизованную версию: подсвечиваем R: зелёным, ошибки красным
-                    files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
+                    if getattr(args, "infinite", False):
+                        # В бесконечном режиме показываем общее количество прочитанных объектов
+                        r_part = f"R:{files_read} objects read"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part} | Total in bucket: {total_files}"
+                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part} | Total in bucket: {total_files}"
+                    else:
+                        read_pct = (files_read / total_files * 100) if total_files > 0 else 0.0
+                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part}"
+                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
                 else:
                     read_pct = 0.0
                     phase_info = " [WRITE]"
                     # В фазе записи: подсвечиваем данные записи (W:) зелёным, R: без стилей
-                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
-                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
-                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                    err_part = f"Err {files_err}"
-                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
-                    # Создаём стилизованную версию: подсвечиваем W: зелёным, R: без стилей, ошибки красным
-                    files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
+                    if getattr(args, "infinite", False):
+                        # В бесконечном режиме показываем общее количество записанных файлов
+                        w_part = f"W:{files_done} files written"
+                        r_part = f"R:{files_read}"
+                        w_bytes_part = f"W:{format_bytes(bytes_done)}"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
+                        files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
+                    else:
+                        w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
+                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
+                        w_bytes_part = f"W:{format_bytes(bytes_done)}"
+                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
+                        err_part = f"Err {files_err}"
+                        files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
+                        files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
                 plain_lines.append(files_line)
                 styled_lines.append((files_line_styled, files_color, False))
@@ -1004,32 +1118,43 @@ def run_profile(args):
                     latency_line_styled = f"Latency {lat_line}"
                 plain_lines.append(f"Latency {lat_line}")
                 styled_lines.append((latency_line_styled, (ANSI_DIM,), False))
-                groups_title = "Groups:"
-                plain_lines.append(groups_title)
-                styled_lines.append((groups_title, (ANSI_BOLD,), False))
-                with group_lock:
-                    for group, info in groups.items():
-                        done = info["done_files"]
-                        total = info["total_files"]
-                        done_pct = (done / total * 100) if total else 0.0
-                        done_bytes = info["done_bytes"]
-                        total_b = info["total_bytes"]
-                        bytes_pct = (done_bytes / total_b * 100) if total_b else 0.0
-                        errors = info["errors"]
-                        inflight_group = sum(1 for job in active_snapshot if job.group == group)
-                        pending_group = pending_snapshot.get(group, 0)
-                        done_bytes_str = format_bytes(done_bytes).rjust(9)
-                        total_bytes_str = format_bytes(total_b).ljust(9)
-                        line = (
-                            f"  {group:<8} | files {done:3d}/{total:<3d} ({done_pct:5.1f}%) | bytes {done_bytes_str}/{total_bytes_str} ({bytes_pct:5.1f}%) | inflight {inflight_group:2d} | pending {pending_group:3d} | err {errors}"
-                        )
-                        plain_lines.append(line)
-                        if errors > 0:
-                            styled_lines.append((line, (ANSI_RED,), False))
-                        elif done_pct >= 99.9:
-                            styled_lines.append((line, (ANSI_GREEN,), False))
-                        else:
-                            styled_lines.append((line, (ANSI_CYAN,), False))
+                
+                # Анализатор ТОП10 файлов
+                if profile == "write" or (profile == "read"):
+                    op_type = "upload" if profile == "write" else "download"
+                    small_stats, large_stats, avg_speed_all = metrics.get_file_stats(op_type)
+                    if small_stats or large_stats:
+                        analyzer_title = "File Analyzer:"
+                        plain_lines.append(analyzer_title)
+                        styled_lines.append((analyzer_title, (ANSI_BOLD,), False))
+                        
+                        # ТОП10 маленьких
+                        if small_stats:
+                            small_line = "  Small (top10): "
+                            small_parts = []
+                            for size_bytes, count, speed in small_stats[:5]:  # Показываем только первые 5
+                                size_str = format_bytes(size_bytes)
+                                small_parts.append(f"{size_str}×{count}@{speed:.1f}MB/s")
+                            small_line += " | ".join(small_parts)
+                            plain_lines.append(small_line)
+                            styled_lines.append((small_line, (ANSI_CYAN,), False))
+                        
+                        # ТОП10 больших
+                        if large_stats:
+                            large_line = "  Large (top10): "
+                            large_parts = []
+                            for size_bytes, count, speed in large_stats[-5:]:  # Показываем последние 5
+                                size_str = format_bytes(size_bytes)
+                                large_parts.append(f"{size_str}×{count}@{speed:.1f}MB/s")
+                            large_line += " | ".join(large_parts)
+                            plain_lines.append(large_line)
+                            styled_lines.append((large_line, (ANSI_YELLOW,), False))
+                        
+                        # Средняя скорость
+                        if avg_speed_all > 0:
+                            avg_line = f"  Avg speed: {avg_speed_all:.1f} MB/s"
+                            plain_lines.append(avg_line)
+                            styled_lines.append((avg_line, (ANSI_GREEN,), False))
                 interior_width = max(visible_len(line) for line in plain_lines)
                 border = "+" + "-" * (interior_width + 2) + "+"
                 speed_border = "|" + style("=" * (interior_width + 2), ANSI_BOLD, ANSI_MAGENTA) + "|"
