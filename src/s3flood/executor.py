@@ -1035,7 +1035,8 @@ def run_profile(args):
                 pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
                 with cycle_lock:
                     cycle_info = f" | cycle {cycle_count}" if getattr(args, "infinite", False) else ""
-                spinner = get_spinner() if inflight > 0 else " "
+                # Спиннер крутится всегда, пока программа работает (пока есть потоки или задачи)
+                spinner = get_spinner()  # Всегда крутится, пока программа работает
                 header = f"{spinner} S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
                 plain_lines.append(header)
                 styled_lines.append((header, (ANSI_BOLD, ANSI_CYAN), False))
