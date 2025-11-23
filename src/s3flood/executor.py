@@ -1195,9 +1195,9 @@ def run_profile(args):
                     # Создаём стилизованную версию: подсвечиваем R: зелёным, W: без стилей, ошибки красным
                     files_line_styled = f"Files {w_part} {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {w_bytes_part} {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     files_color = ()  # Без общего цвета строки
-                    else:
-                        read_pct = 0.0
-                        phase_info = " [WRITE]"
+                else:
+                    read_pct = 0.0
+                    phase_info = " [WRITE]"
                     # В фазе записи: подсвечиваем данные записи (W:) зелёным, R: без стилей
                     if getattr(args, "infinite", False):
                         # В бесконечном режиме показываем файлы в текущем цикле и общее количество
