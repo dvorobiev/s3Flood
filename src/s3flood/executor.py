@@ -1265,7 +1265,7 @@ def run_profile(args):
                         render_lines.append(speed_border)
                     # Если коды пустые, значит строка уже стилизована (например, заголовок со спиннером)
                     if codes:
-                    colored = style(plain, *codes)
+                        colored = style(plain, *codes)
                     else:
                         colored = plain  # Уже стилизована
                     padding = " " * (interior_width - visible_len(plain))
