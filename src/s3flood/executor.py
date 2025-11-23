@@ -1284,7 +1284,7 @@ def run_profile(args):
                         sys.stdout.write("\n" + "=" * 100 + "\n")
                 for line in render_lines:
                     if USE_COLORS:
-                    sys.stdout.write("\x1b[2K")
+                        sys.stdout.write("\x1b[2K")
                     sys.stdout.write(line + "\n")
                 sys.stdout.flush()
                 last_print = now
