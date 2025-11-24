@@ -161,6 +161,8 @@ class Metrics:
                         "op": op,
                         "filename": filename,
                         "speed_mbps": speed_mbps,
+                        "bytes": nbytes,
+                        "latency_ms": lat_ms,
                         "ended": end
                     })
             else:
@@ -1156,43 +1158,6 @@ def run_profile(args):
                         eta_sec = (total_bytes - bytes_done) / wbps
                 eta_str = f"{eta_sec/60:.1f} min" if eta_sec and eta_sec > 60 else (f"{eta_sec:.0f} s" if eta_sec else "n/a")
                 
-                # Показываем последнюю операцию (upload или download)
-                last_info = "n/a"
-                if profile == "read":
-                    # Для read профиля показываем только чтение
-                    last_download = metrics.last_download
-                    if last_download:
-                        last_size_mb = last_download["bytes"] / 1024 / 1024
-                        last_dur = last_download["lat_ms"] / 1000
-                        last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                elif download_phase_started or mixed_phase_started:
-                    # В mixed фазе показываем последнюю операцию (может быть и read, и write)
-                    last_download = metrics.last_download
-                    last_upload = metrics.last_upload
-                    if last_download and last_upload:
-                        # Показываем более свежую операцию
-                        if last_download.get("ended", 0) > last_upload.get("ended", 0):
-                            last_size_mb = last_download["bytes"] / 1024 / 1024
-                            last_dur = last_download["lat_ms"] / 1000
-                            last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                        else:
-                            last_size_mb = last_upload["bytes"] / 1024 / 1024
-                            last_dur = last_upload["lat_ms"] / 1000
-                            last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                    elif last_download:
-                        last_size_mb = last_download["bytes"] / 1024 / 1024
-                        last_dur = last_download["lat_ms"] / 1000
-                        last_info = f"R:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                    elif last_upload:
-                        last_size_mb = last_upload["bytes"] / 1024 / 1024
-                        last_dur = last_upload["lat_ms"] / 1000
-                        last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
-                else:
-                    last_upload = metrics.last_upload
-                    if last_upload:
-                        last_size_mb = last_upload["bytes"] / 1024 / 1024
-                        last_dur = last_upload["lat_ms"] / 1000
-                        last_info = f"W:{last_size_mb:.1f}MB/{last_dur:.2f}s"
                 plain_lines: list[str] = []
                 styled_lines: list[tuple[str, tuple[str, ...], bool]] = []
                 pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
@@ -1285,24 +1250,24 @@ def run_profile(args):
                 if profile == "read":
                     # Для read профиля показываем только чтение
                     r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
-                    rate_line_plain = f"Rates {r_rates_part} | last {last_info}"
-                    rate_line_styled = f"Rates {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                    rate_line_plain = f"Rates {r_rates_part}"
+                    rate_line_styled = f"Rates {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)}"
                 elif download_phase_started or mixed_phase_started:
                     # В фазе чтения/mixed: подсвечиваем R: зелёным, W: без стилей (или оба, если mixed)
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
                     r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
-                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part} | last {last_info}"
+                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part}"
                     if mixed_phase_started:
                         # В mixed фазе подсвечиваем оба
-                        rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_CYAN)}"
+                        rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)}"
                     else:
-                        rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                        rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)}"
                 else:
                     # В фазе записи: подсвечиваем W: зелёным, R: без стилей
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
                     r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
-                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part} | last {last_info}"
-                    rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_GREEN)} | {r_rates_part} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part}"
+                    rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_GREEN)} | {r_rates_part}"
                 plain_lines.append(rate_line_plain)
                 styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
 
@@ -1316,92 +1281,29 @@ def run_profile(args):
                         icon = WRITE_ICON if entry["op"] == "upload" else READ_ICON
                         filename_disp = shorten_middle(entry["filename"], 32)
                         speed_disp = f"{entry['speed_mbps']:6.1f} MB/s"
-                        line_plain = f"  {icon} {filename_disp:<32} {speed_disp}"
+                        size_bytes = entry.get("bytes") or 0
+                        latency_ms = entry.get("latency_ms") or 0
+                        size_gb = size_bytes / (1024 ** 3)
+                        latency_s = latency_ms / 1000
+                        size_disp = f"{size_gb:6.2f} GB"
+                        time_disp = f"{latency_s:6.2f} s"
+                        line_plain = f"  {icon} {filename_disp:<32} {size_disp} {time_disp} {speed_disp}"
                         color = (ANSI_BOLD, ANSI_GREEN) if entry["op"] == "upload" else (ANSI_BOLD, ANSI_CYAN)
                         plain_lines.append(line_plain)
                         styled_lines.append((line_plain, color, False))
                 
-                # Получаем последние операции для правой колонки
-                recent_ops = metrics.get_recent_ops(6)
-                right_column_lines = []
-                right_column_styled = []
-                
-                # Заголовок правой колонки
-                right_header = "Recent files"
-                right_column_lines.append(right_header)
-                right_column_styled.append((style(right_header, ANSI_BOLD, ANSI_CYAN), (ANSI_BOLD, ANSI_CYAN), False))
-                
-                # Добавляем последние операции (в обратном порядке - новые снизу)
-                for op_info in recent_ops:
-                    op_type = op_info["op"]
-                    filename = op_info["filename"]
-                    speed = op_info["speed_mbps"]
-                    
-                    # Пиктограммы: ↑ для записи, ↓ для чтения
-                    icon = "↑" if op_type == "upload" else "↓"
-                    icon_color = ANSI_YELLOW if op_type == "upload" else ANSI_GREEN
-                    
-                    # Обрезаем имя файла до 25 символов
-                    truncated_name = truncate_filename(filename, 25)
-                    
-                    # Форматируем строку: пиктограмма + имя файла + скорость
-                    file_line = f"{icon} {truncated_name:25s} {speed:6.1f} MB/s"
-                    file_line_styled = f"{style(icon, ANSI_BOLD, icon_color)} {truncated_name:25s} {style(f'{speed:6.1f} MB/s', ANSI_DIM)}"
-                    
-                    right_column_lines.append(file_line)
-                    right_column_styled.append((file_line_styled, (), False))
-                
-                # Если операций меньше 6, заполняем пустыми строками
-                while len(right_column_lines) < 7:  # 1 заголовок + 6 операций
-                    right_column_lines.append("")
-                    right_column_styled.append(("", (), False))
-                
-                # Определяем ширину левой и правой колонок
-                left_width = max(visible_len(line) for line in plain_lines)
-                right_width = max(visible_len(line) for line in right_column_lines) if right_column_lines else 0
-                
-                # Общая ширина с разделителем
-                separator_width = 3  # " | "
-                total_width = left_width + separator_width + right_width
-                
-                border = "+" + "-" * (total_width + 2) + "+"
-                speed_border = "|" + style("=" * (total_width + 2), ANSI_BOLD, ANSI_CYAN) + "|"
+                content_width = max(visible_len(line) for line in plain_lines) if plain_lines else 0
+                border = "+" + "-" * (content_width + 2) + "+"
+                speed_border = "|" + style("=" * (content_width + 2), ANSI_BOLD, ANSI_CYAN) + "|"
                 render_lines = [border]
                 
-                # Объединяем левую и правую колонки
-                max_lines = max(len(styled_lines), len(right_column_styled))
-                for i in range(max_lines):
-                    # Левая колонка
-                    if i < len(styled_lines):
-                        plain, codes, accent = styled_lines[i]
-                        if accent:
-                            render_lines.append(speed_border)
-                        # Если коды пустые, значит строка уже стилизована
-                        if codes:
-                            left_colored = style(plain, *codes)
-                        else:
-                            left_colored = plain
-                        left_padding = " " * (left_width - visible_len(plain))
-                        left_part = f"{left_colored}{left_padding}"
-                    else:
-                        left_part = " " * left_width
-                    
-                    # Правая колонка
-                    if i < len(right_column_styled):
-                        right_plain, right_codes, right_accent = right_column_styled[i]
-                        if right_codes:
-                            right_colored = style(right_plain, *right_codes)
-                        else:
-                            right_colored = right_plain
-                        right_padding = " " * (right_width - visible_len(right_plain))
-                        right_part = f"{right_colored}{right_padding}"
-                    else:
-                        right_part = " " * right_width
-                    
-                    # Объединяем колонки
-                    render_lines.append(f"| {left_part} | {right_part} |")
-                    
-                    if i < len(styled_lines) and styled_lines[i][2]:  # accent
+                for plain, codes, accent in styled_lines:
+                    if accent:
+                        render_lines.append(speed_border)
+                    colored = style(plain, *codes) if codes else plain
+                    padding = " " * (content_width - visible_len(plain))
+                    render_lines.append(f"| {colored}{padding} |")
+                    if accent:
                         render_lines.append(speed_border)
                 
                 render_lines.append(border)
@@ -1417,6 +1319,8 @@ def run_profile(args):
                 for line in render_lines:
                     if USE_COLORS:
                         sys.stdout.write("\x1b[2K")
+                    # После очистки строки выводим актуальное содержимое и перенос
+                    sys.stdout.write(line + "\n")
                 sys.stdout.flush()
                 last_print = now
     except KeyboardInterrupt:
