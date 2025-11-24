@@ -120,10 +120,33 @@ class Metrics:
         self.err_ops = 0
         self.last_upload = None
         self.last_download = None
-        self.recent_ops = deque(maxlen=6)  # Последние 6 операций для дашборда
+        self.recent_ops = deque(maxlen=30)  # Буфер последних операций для дашборда
+        self._active_recent_ops: dict[int, dict] = {}
+        self._op_counter = 0
         with open(self.csv_path, "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=["ts_start","ts_end","op","bytes","status","latency_ms","error"])
             w.writeheader()
+
+    def start_recent_op(self, op: str, filename: str, nbytes: int, started: float) -> int:
+        """Регистрирует операцию в списке Recent ops ещё до завершения."""
+        with self._lock:
+            op_id = self._op_counter
+            self._op_counter += 1
+            entry = {
+                "id": op_id,
+                "op": op,
+                "filename": filename,
+                "bytes": nbytes,
+                "speed_mbps": None,
+                "latency_ms": None,
+                "started": started,
+                "ended": None,
+                "done": False,
+                "error": None,
+            }
+            self.recent_ops.append(entry)
+            self._active_recent_ops[op_id] = entry
+            return op_id
 
     def elapsed(self) -> float:
         return max(time.time() - self._start, 1e-6)
@@ -134,7 +157,7 @@ class Metrics:
     def avg_read_rate(self) -> float:
         return self.read_bytes / self.elapsed()
 
-    def record(self, op: str, start: float, end: float, nbytes: int, ok: bool, err: str|None, filename: str|None = None):
+    def record(self, op: str, start: float, end: float, nbytes: int, ok: bool, err: str|None, filename: str|None = None, recent_id: int | None = None):
         lat_ms = int((end-start)*1000)
         with self._lock:
             with open(self.csv_path, "a", newline="") as f:
@@ -145,6 +168,34 @@ class Metrics:
                 })
             self.ops.append((op, start, end, nbytes, ok, lat_ms))
             self.window.append((end, op, nbytes, ok, lat_ms))
+            entry = None
+            if recent_id is not None:
+                entry = self._active_recent_ops.pop(recent_id, None)
+            if entry is None and filename:
+                entry = {
+                    "id": recent_id if recent_id is not None else -1,
+                    "op": op,
+                    "filename": filename,
+                    "bytes": nbytes,
+                    "speed_mbps": None,
+                    "latency_ms": None,
+                    "started": start,
+                    "ended": None,
+                    "done": False,
+                    "error": None,
+                }
+                self.recent_ops.append(entry)
+            if entry is not None:
+                entry["bytes"] = nbytes
+                entry["latency_ms"] = lat_ms
+                entry["ended"] = end
+                entry["done"] = True
+                entry["error"] = err
+                if lat_ms > 0:
+                    entry["speed_mbps"] = (nbytes / 1024 / 1024) / (lat_ms / 1000)
+                else:
+                    entry["speed_mbps"] = None
+
             if ok:
                 if op == "download":
                     self.read_ops_ok += 1
@@ -154,17 +205,6 @@ class Metrics:
                     self.write_ops_ok += 1
                     self.write_bytes += nbytes
                     self.last_upload = {"bytes": nbytes, "lat_ms": lat_ms, "ended": end}
-                # Сохраняем последнюю операцию для дашборда
-                if filename and lat_ms > 0:
-                    speed_mbps = (nbytes / 1024 / 1024) / (lat_ms / 1000)
-                    self.recent_ops.append({
-                        "op": op,
-                        "filename": filename,
-                        "speed_mbps": speed_mbps,
-                        "bytes": nbytes,
-                        "latency_ms": lat_ms,
-                        "ended": end
-                    })
             else:
                 self.err_ops += 1
     
@@ -802,6 +842,11 @@ def run_profile(args):
                 else:
                     continue
             start = time.time()
+            if op == "download" and profile == "read":
+                display_name = str(job.path)
+            else:
+                display_name = job.path.name
+            recent_op_id = metrics.start_recent_op(op, display_name, job.size, start)
             with active_lock:
                 if op == "upload":
                     active_uploads += 1
@@ -833,7 +878,7 @@ def run_profile(args):
                 end = time.time()
                 nbytes = job.size
                 filename = job.path.name
-                metrics.record("upload", start, end, nbytes, ok, err, filename)
+                metrics.record("upload", start, end, nbytes, ok, err, filename, recent_op_id)
                 if ok:
                     with group_lock:
                         grp = groups[job.group]
@@ -913,7 +958,7 @@ def run_profile(args):
                     filename = str(job.path)  # Для read профиля path содержит key объекта
                 else:
                     filename = job.path.name
-                metrics.record("download", start, end, nbytes, ok, err, filename)
+                metrics.record("download", start, end, nbytes, ok, err, filename, recent_op_id)
             with active_lock:
                 if op == "upload":
                     active_uploads -= 1
@@ -1272,7 +1317,8 @@ def run_profile(args):
                 styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
 
                 # История последних операций
-                recent_ops = metrics.get_recent_ops()
+                display_recent = max(1, min(getattr(args, "threads", 1), 15))
+                recent_ops = metrics.get_recent_ops(display_recent)
                 if recent_ops:
                     recent_header = "Recent ops (latest bottom):"
                     plain_lines.append(recent_header)
@@ -1280,13 +1326,22 @@ def run_profile(args):
                     for entry in recent_ops:
                         icon = WRITE_ICON if entry["op"] == "upload" else READ_ICON
                         filename_disp = shorten_middle(entry["filename"], 32)
-                        speed_disp = f"{entry['speed_mbps']:6.1f} MB/s"
                         size_bytes = entry.get("bytes") or 0
-                        latency_ms = entry.get("latency_ms") or 0
                         size_gb = size_bytes / (1024 ** 3)
-                        latency_s = latency_ms / 1000
                         size_disp = f"{size_gb:6.2f} GB"
-                        time_disp = f"{latency_s:6.2f} s"
+                        if entry.get("done"):
+                            latency_ms = entry.get("latency_ms") or 0
+                            latency_s = latency_ms / 1000
+                            time_disp = f"{latency_s:7.2f} s"
+                            speed_val = entry.get("speed_mbps")
+                            if speed_val is not None:
+                                speed_disp = f"{speed_val:7.1f} MB/s"
+                            else:
+                                speed_disp = f"{'--':>7} MB/s"
+                        else:
+                            elapsed_s = max(now - entry.get("started", now), 0.0)
+                            time_disp = f"{elapsed_s:7.2f} s"
+                            speed_disp = f"{'--':>7} MB/s"
                         line_plain = f"  {icon} {filename_disp:<32} {size_disp} {time_disp} {speed_disp}"
                         color = (ANSI_BOLD, ANSI_GREEN) if entry["op"] == "upload" else (ANSI_BOLD, ANSI_CYAN)
                         plain_lines.append(line_plain)
