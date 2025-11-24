@@ -5,10 +5,35 @@ from .executor import run_profile
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="s3flood")
+    parser = argparse.ArgumentParser(
+        prog="s3flood",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Минималистичный клиент для нагрузочного тестирования S3"
+    )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    dcreate = sub.add_parser("dataset-create", help="Создать датасет для нагрузочного тестирования")
+    dataset_create_epilog = """
+Примеры создания датасета:
+
+  # Создать датасет с дефолтными настройками (автоматический размер)
+  s3flood dataset-create --path ./loadset
+
+  # Создать датасет размером 5GB
+  s3flood dataset-create --path ./loadset --target-bytes 5GB
+
+  # Создать датасет с символическими ссылками (экономит место)
+  s3flood dataset-create --path ./loadset --use-symlinks
+
+  # Создать датасет с кастомными параметрами
+  s3flood dataset-create --path ./loadset --target-bytes 10GB \\
+    --min-counts 200,100,50 --group-limits 50MB,500MB,5GB
+"""
+    dcreate = sub.add_parser(
+        "dataset-create",
+        help="Создать датасет для нагрузочного тестирования",
+        epilog=dataset_create_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     dcreate.add_argument("--path", required=True, help="Путь к каталогу, где будет создан датасет")
     dcreate.add_argument("--target-bytes", type=str, default="auto", help="Целевой размер датасета (например, '5GB', '1TB') или 'auto' для использования 80%% свободного места")
     dcreate.add_argument("--use-symlinks", action="store_true", help="Использовать символические ссылки вместо реальных файлов (экономит место, но не работает при копировании на Windows)")
@@ -16,7 +41,45 @@ def main():
     dcreate.add_argument("--group-limits", type=str, default="100MB,1GB,10GB", help="Максимальные размеры файлов для групп small,medium,large (формат: '100MB,1GB,10GB'). Совет: ≤5GB для защиты от BadDigest")
     dcreate.add_argument("--safety-ratio", type=float, default=0.8, help="Доля свободного места для использования при --target-bytes auto (по умолчанию 0.8 = 80%%)")
 
-    runp = sub.add_parser("run", help="Запустить нагрузочный тест S3")
+    run_epilog = """
+Примеры запуска тестирования:
+
+  # Запуск с конфигурационным файлом
+  s3flood run --config config.yaml
+
+  # Запуск с параметрами через CLI (MinIO)
+  s3flood run --profile write \\
+    --endpoint http://localhost:9000 \\
+    --bucket test \\
+    --access-key minioadmin \\
+    --secret-key minioadmin \\
+    --data-dir ./loadset/data
+
+  # Запуск профиля чтения
+  s3flood run --profile read \\
+    --endpoint http://localhost:9000 \\
+    --bucket test \\
+    --access-key minioadmin \\
+    --secret-key minioadmin
+
+  # Запуск mixed профиля с bursty паттерном
+  s3flood run --config config.yaml \\
+    --profile mixed-70-30 \\
+    --pattern bursty \\
+    --threads 16 \\
+    --infinite
+
+  # Запуск с кластером (несколько endpoints)
+  s3flood run --config config.yaml \\
+    --endpoints http://node1:9000 http://node2:9000 \\
+    --endpoint-mode round-robin
+"""
+    runp = sub.add_parser(
+        "run",
+        help="Запустить нагрузочный тест S3",
+        epilog=run_epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     runp.add_argument("--config", help="YAML-файл с параметрами запуска (endpoint, bucket, креденшлы). Все параметры из конфига можно переопределить через CLI")
     runp.add_argument("--profile", choices=["write","read","mixed-70-30"], default=None, help="Профиль нагрузки: write (только запись), read (только чтение из бакета), mixed-70-30 (смешанные операции)")
     runp.add_argument("--client", choices=["awscli","rclone","s3cmd"], default=None, help="S3 клиент для использования (по умолчанию: awscli)")
