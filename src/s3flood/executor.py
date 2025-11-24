@@ -644,6 +644,12 @@ def run_profile(args):
     profile = getattr(args, "profile", "write")
     order = getattr(args, "order", "sequential")
     
+    jobs: list[Job] = []
+    groups: dict[str, dict[str, float]] = {}
+    total_files = 0
+    total_bytes = 0
+    data_root = None
+    
     # Для read профиля получаем список объектов из бакета
     if profile == "read":
         endpoints_list = list(getattr(args, "endpoints", []) or [])
@@ -669,10 +675,7 @@ def run_profile(args):
             return
         
         # Создаём jobs из объектов бакета
-        jobs: list[Job] = []
-        groups = {}
         total_files = len(objects)
-        total_bytes = 0
         for obj in objects:
             key = obj["key"]
             size = obj["size"]
@@ -701,33 +704,29 @@ def run_profile(args):
         print(f"Loaded {total_files} objects totalling {total_bytes/1024/1024:.1f} MB from bucket across groups: {group_summary}")
     else:
         # Для write и mixed профилей используем файлы из data_dir
-        pass
-    
-    data_root = Path(args.data_dir).resolve()
-    if not data_root.exists():
-        print(f"Data dir not found: {data_root}")
-        return
-
-    files = gather_files(data_root)
-    if not files:
-        print(f"No dataset files found under {data_root}")
-        return
-
-    try:
-        files.sort(key=lambda p: p.stat().st_size)
-        jobs: list[Job] = []
-        groups = {}
-        total_files = len(files)
-        total_bytes = 0
-        for p in files:
-            size = p.stat().st_size
-            rel = p.relative_to(data_root)
-            group = rel.parts[0] if rel.parts else "root"
-            jobs.append(Job(path=p, size=size, group=group))
-            total_bytes += size
-            grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
-            grp["total_files"] += 1
-            grp["total_bytes"] += size
+        data_root = Path(args.data_dir).resolve()
+        if not data_root.exists():
+            print(f"Data dir not found: {data_root}")
+            return
+        
+        files = gather_files(data_root)
+        if not files:
+            print(f"No dataset files found under {data_root}")
+            return
+        
+        try:
+            files.sort(key=lambda p: p.stat().st_size)
+            total_files = len(files)
+            total_bytes = 0
+            for p in files:
+                size = p.stat().st_size
+                rel = p.relative_to(data_root)
+                group = rel.parts[0] if rel.parts else "root"
+                jobs.append(Job(path=p, size=size, group=group))
+                total_bytes += size
+                grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
+                grp["total_files"] += 1
+                grp["total_bytes"] += size
             
             # Сортировка по порядку
             if order == "sequential":
@@ -735,11 +734,11 @@ def run_profile(args):
             else:  # random
                 random.shuffle(jobs)
             
-        group_summary = ", ".join(f"{g}={info['total_files']}" for g, info in groups.items())
-        print(f"Loaded {total_files} files totalling {total_bytes/1024/1024:.1f} MB across groups: {group_summary}")
-    except OSError as e:
-        print(f"Failed to stat dataset files: {e}")
-        return
+            group_summary = ", ".join(f"{g}={info['total_files']}" for g, info in groups.items())
+            print(f"Loaded {total_files} files totalling {total_bytes/1024/1024:.1f} MB across groups: {group_summary}")
+        except OSError as e:
+            print(f"Failed to stat dataset files: {e}")
+            return
 
     endpoints_list = list(getattr(args, "endpoints", []) or [])
     if not endpoints_list:
