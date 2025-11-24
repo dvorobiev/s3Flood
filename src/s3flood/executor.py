@@ -29,6 +29,9 @@ ANSI_CYAN = "\x1b[36m" if USE_COLORS else ""
 
 ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
 
+WRITE_ICON = "↑"
+READ_ICON = "↓"
+
 # Спиннер для индикации активности
 SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 spinner_index = 0
@@ -66,6 +69,20 @@ def style(text: str, *codes: str) -> str:
         return text
     prefix = "".join(codes)
     return f"{prefix}{text}{ANSI_RESET}" if codes else text
+
+
+def shorten_middle(text: str, max_len: int) -> str:
+    """Обрезает строку, вставляя ... посередине, если она не помещается."""
+    if text is None:
+        return ""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 3:
+        return text[:max_len]
+    keep = max_len - 3
+    head = keep // 2
+    tail = keep - head
+    return f"{text[:head]}...{text[-tail:]}"
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -1288,6 +1305,21 @@ def run_profile(args):
                     rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_GREEN)} | {r_rates_part} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
                 plain_lines.append(rate_line_plain)
                 styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
+
+                # История последних операций
+                recent_ops = metrics.get_recent_ops()
+                if recent_ops:
+                    recent_header = "Recent ops (latest bottom):"
+                    plain_lines.append(recent_header)
+                    styled_lines.append((recent_header, (ANSI_BOLD, ANSI_BLUE), False))
+                    for entry in recent_ops:
+                        icon = WRITE_ICON if entry["op"] == "upload" else READ_ICON
+                        filename_disp = shorten_middle(entry["filename"], 32)
+                        speed_disp = f"{entry['speed_mbps']:6.1f} MB/s"
+                        line_plain = f"  {icon} {filename_disp:<32} {speed_disp}"
+                        color = (ANSI_BOLD, ANSI_GREEN) if entry["op"] == "upload" else (ANSI_BOLD, ANSI_CYAN)
+                        plain_lines.append(line_plain)
+                        styled_lines.append((line_plain, color, False))
                 
                 # Получаем последние операции для правой колонки
                 recent_ops = metrics.get_recent_ops(6)
@@ -1347,11 +1379,11 @@ def run_profile(args):
                         # Если коды пустые, значит строка уже стилизована
                         if codes:
                             left_colored = style(plain, *codes)
-                            else:
+                        else:
                             left_colored = plain
                         left_padding = " " * (left_width - visible_len(plain))
                         left_part = f"{left_colored}{left_padding}"
-                        else:
+                    else:
                         left_part = " " * left_width
                     
                     # Правая колонка
@@ -1359,11 +1391,11 @@ def run_profile(args):
                         right_plain, right_codes, right_accent = right_column_styled[i]
                         if right_codes:
                             right_colored = style(right_plain, *right_codes)
-                    else:
+                        else:
                             right_colored = right_plain
                         right_padding = " " * (right_width - visible_len(right_plain))
                         right_part = f"{right_colored}{right_padding}"
-                            else:
+                    else:
                         right_part = " " * right_width
                     
                     # Объединяем колонки
@@ -1378,13 +1410,13 @@ def run_profile(args):
                     first_frame = False
                 else:
                     if USE_COLORS:
-                    sys.stdout.write(f"\x1b[{table_height}A")
+                        sys.stdout.write(f"\x1b[{table_height}A")
                     else:
                         # На Windows без поддержки ANSI просто выводим разделитель
                         sys.stdout.write("\n" + "=" * 100 + "\n")
                 for line in render_lines:
                     if USE_COLORS:
-                    sys.stdout.write("\x1b[2K")
+                        sys.stdout.write("\x1b[2K")
                 sys.stdout.flush()
                 last_print = now
     except KeyboardInterrupt:
