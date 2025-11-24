@@ -719,8 +719,8 @@ def run_profile(args):
             q.put(("upload", job))
     elif profile == "mixed-70-30":
         # Для mixed профиля сначала загружаем данные
-    for job in jobs:
-        q.put(("upload", job))
+        for job in jobs:
+            q.put(("upload", job))
     metrics = Metrics(args.metrics, args.report)
 
     stop = threading.Event()
