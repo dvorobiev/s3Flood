@@ -5,10 +5,29 @@ from .executor import run_profile
 
 
 def main():
+    top_level_epilog = """
+Быстрые примеры:
+
+  # Создать дефолтный датасет (авторазмер)
+  s3flood dataset-create --path ./loadset
+
+  # Запустить тест с конфигом
+  s3flood run --config config.yaml
+
+  # Запустить write-профиль (MinIO)
+  s3flood run --profile write \\
+    --endpoint http://localhost:9000 --bucket test \\
+    --access-key minioadmin --secret-key minioadmin \\
+    --data-dir ./loadset/data
+
+  # Запустить read-профиль
+  s3flood run --profile read --config config.yaml
+"""
     parser = argparse.ArgumentParser(
         prog="s3flood",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description="Минималистичный клиент для нагрузочного тестирования S3"
+        description="Минималистичный клиент для нагрузочного тестирования S3",
+        epilog=top_level_epilog
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
