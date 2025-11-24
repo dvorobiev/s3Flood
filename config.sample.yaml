@@ -3,19 +3,19 @@ run:
   profile: write
   client: awscli
   # Один endpoint...
-  endpoint: "http://192.168.20.35:9080"
+  endpoint: "http://127.0.0.1:9000"
   # ...или кластерный режим (см. endpoint_mode: round-robin|random)
   # endpoints:
-  #   - "http://192.168.20.35:9080"
-  #   - "http://192.168.20.36:9080"
+  #   - "http://127.0.0.1:9000"
+  #   - "http://127.0.0.2:9000"
   # endpoint_mode: round-robin
-  bucket: cluster_test
+  bucket: "your-bucket-name"
   # Варианты аутентификации:
   # 1. Указать access/secret ключи вручную (как ниже) — не храните их в репозитории.
   # 2. Либо удалить access_key/secret_key и прописать aws_profile (или воспользоваться AWS CLI профилем по умолчанию).
-  access_key: "YOUR_ACCESS_KEY"
-  secret_key: "YOUR_SECRET_KEY"
-  # aws_profile: default
+  # access_key: "YOUR_ACCESS_KEY"
+  # secret_key: "YOUR_SECRET_KEY"
+  aws_profile: default
   threads: 8
   data_dir: "./loadset/data"
   report: "out.json"
@@ -32,5 +32,7 @@ run:
   # max_retries: 3  # Количество повторов при ошибке
   # retry_backoff_base: 2.0  # Базовый множитель для экспоненциального backoff при повторах (по умолчанию: 2.0, т.е. задержки: 1s, 2s, 4s между попытками)
   # Порядок обработки файлов
-  # order: sequential  # sequential (сначала маленькие) или random (случайный порядок)
+  order: random  # sequential (сначала маленькие) или random (случайный порядок)
+  # Уникальные имена объектов в бакете (добавляет постфикс и не перезаписывает предыдущие файлы)
+  unique_remote_names: false
 

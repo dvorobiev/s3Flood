@@ -1,4 +1,4 @@
-import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random, math
+import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random, math, uuid
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass
@@ -103,6 +103,16 @@ class Job:
     size: int
     group: str
     endpoint: str | None = None  # Привязанный endpoint для кластерного режима
+    remote_key: str | None = None  # Последний ключ в бакете (для чтения/mixed)
+def make_remote_key(filename: str, unique: bool) -> str:
+    """Возвращает имя объекта для бакета, опционально добавляя уникальный постфикс."""
+    if not unique:
+        return filename
+    stem, ext = os.path.splitext(filename)
+    suffix = f"{int(time.time()*1000):x}-{uuid.uuid4().hex[:6]}"
+    if ext:
+        return f"{stem}.{suffix}{ext}"
+    return f"{stem}.{suffix}"
 
 
 class Metrics:
@@ -675,7 +685,7 @@ def run_profile(args):
                 group = "large"
             # Для read профиля path не используется, но нужен для совместимости с Job
             fake_path = Path(key)
-            jobs.append(Job(path=fake_path, size=size, group=group))
+            jobs.append(Job(path=fake_path, size=size, group=group, remote_key=key))
             total_bytes += size
             grp = groups.setdefault(group, {"total_files": 0, "total_bytes": 0, "done_files": 0, "done_bytes": 0, "errors": 0})
             grp["total_files"] += 1
@@ -766,6 +776,7 @@ def run_profile(args):
     burst_intensity_multiplier = getattr(args, "burst_intensity_multiplier", 10.0)
     max_retries = getattr(args, "max_retries", 3)
     retry_backoff_base = getattr(args, "retry_backoff_base", 2.0)
+    unique_remote_names = bool(getattr(args, "unique_remote_names", False))
     
     # Инициализация очереди в зависимости от профиля
     if profile == "read":
@@ -789,8 +800,8 @@ def run_profile(args):
     active_jobs: dict[int, Job] = {}
     group_lock = threading.Lock()
     pending_lock = threading.Lock()
-    # Словарь: ключ объекта -> endpoint, через который он был загружен
-    uploaded_objects: dict[str, str] = {}
+    # Словарь: исходное имя файла -> данные о последней загрузке (remote_key + endpoint)
+    uploaded_objects: dict[str, dict[str, str]] = {}
     uploaded_objects_lock = threading.Lock()
     upload_phase_done = threading.Event()
     
@@ -842,8 +853,17 @@ def run_profile(args):
                 else:
                     continue
             start = time.time()
-            if op == "download" and profile == "read":
-                display_name = str(job.path)
+            remote_key = None
+            if op == "upload":
+                base_name = job.path.name
+                remote_key = make_remote_key(base_name, unique_remote_names)
+                display_name = remote_key
+            elif op == "download":
+                if profile == "read":
+                    remote_key = job.remote_key or str(job.path)
+                else:
+                    remote_key = job.remote_key or job.path.name
+                display_name = remote_key
             else:
                 display_name = job.path.name
             recent_op_id = metrics.start_recent_op(op, display_name, job.size, start)
@@ -867,7 +887,7 @@ def run_profile(args):
                     retry_backoff_base,
                     job.path,
                     args.bucket,
-                    job.path.name,
+                    remote_key or job.path.name,
                     endpoint,
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
@@ -878,14 +898,18 @@ def run_profile(args):
                 end = time.time()
                 nbytes = job.size
                 filename = job.path.name
-                metrics.record("upload", start, end, nbytes, ok, err, filename, recent_op_id)
+                metrics.record("upload", start, end, nbytes, ok, err, display_name, recent_op_id)
                 if ok:
                     with group_lock:
                         grp = groups[job.group]
                         grp["done_files"] += 1
                         grp["done_bytes"] += nbytes
+                    job.remote_key = display_name
                     with uploaded_objects_lock:
-                        uploaded_objects[job.path.name] = endpoint
+                        uploaded_objects[job.path.name] = {
+                            "remote_key": display_name,
+                            "endpoint": endpoint,
+                        }
                     # Обновляем счетчик файлов в текущем цикле для infinite режима
                     if getattr(args, "infinite", False) and op == "upload":
                         with cycle_files_lock:
@@ -895,11 +919,8 @@ def run_profile(args):
                         groups[job.group]["errors"] += 1
             elif op == "download":
                 # Для read профиля используем key из path (который содержит имя объекта)
-                # Для других профилей используем path.name
-                if profile == "read":
-                    key = str(job.path)  # Для read профиля path содержит key объекта
-                else:
-                    key = job.path.name
+                # Для других профилей используем remote_key (если он есть) или имя файла
+                key = remote_key or (str(job.path) if profile == "read" else job.path.name)
                 # Используем endpoint из job, если он был сохранён при записи, иначе выбираем новый
                 endpoint = job.endpoint if job.endpoint else next_endpoint()
                 # Используем retry с backoff
@@ -954,10 +975,7 @@ def run_profile(args):
                     except (json.JSONDecodeError, ValueError, KeyError):
                         pass  # Используем job.size если не удалось распарсить
                 # Определяем имя файла для отображения
-                if profile == "read":
-                    filename = str(job.path)  # Для read профиля path содержит key объекта
-                else:
-                    filename = job.path.name
+                filename = key
                 metrics.record("download", start, end, nbytes, ok, err, filename, recent_op_id)
             with active_lock:
                 if op == "upload":
@@ -1012,10 +1030,13 @@ def run_profile(args):
                 # Создаём список всех загруженных объектов для смешанных операций
                 uploaded_list = list(uploaded_objects.items())
                 random.shuffle(uploaded_list)
-                for key, endpoint in uploaded_list:
+                for key, info in uploaded_list:
+                    endpoint = info.get("endpoint")
+                    remote_key_value = info.get("remote_key")
                     if key in key_to_job:
                         job = key_to_job[key]
                         job.endpoint = endpoint
+                        job.remote_key = remote_key_value
                         # Решаем, что делать: чтение или запись (с учётом пропорции)
                         if random.random() < mixed_read_ratio:
                             try:
@@ -1119,12 +1140,13 @@ def run_profile(args):
                         uploaded_list = list(uploaded_objects.items())
                         random.shuffle(uploaded_list)
                         added = 0
-                        for key, endpoint in uploaded_list:
+                        for key, info in uploaded_list:
                             if added >= tasks_to_add:
                                 break
                             if key in key_to_job:
                                 job = key_to_job[key]
-                                job.endpoint = endpoint
+                                job.endpoint = info.get("endpoint")
+                                job.remote_key = info.get("remote_key")
                                 if random.random() < mixed_read_ratio:
                                     try:
                                         q.put(("download", job), block=False)

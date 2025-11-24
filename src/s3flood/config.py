@@ -56,6 +56,7 @@ class RunConfigModel(BaseModel):
     retry_backoff_base: Optional[float] = Field(default=None, gt=1.0)
     # Порядок обработки файлов
     order: Optional[str] = None  # sequential | random
+    unique_remote_names: Optional[bool] = None
 
 
 @dataclass
@@ -82,6 +83,7 @@ class RunSettings:
     max_retries: Optional[int]
     retry_backoff_base: Optional[float]
     order: Optional[str]
+    unique_remote_names: bool
 
     def to_namespace(self) -> Namespace:
         return Namespace(**asdict(self))
@@ -166,6 +168,8 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     max_retries = pick("max_retries", default=3)
     retry_backoff_base = pick("retry_backoff_base", default=2.0)
     
+    unique_remote_names = bool(pick("unique_remote_names", default=False))
+    
     # Порядок обработки файлов
     order = pick("order", default="sequential")
 
@@ -192,5 +196,6 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         max_retries=max_retries,
         retry_backoff_base=retry_backoff_base,
         order=order,
+        unique_remote_names=unique_remote_names,
     )
 

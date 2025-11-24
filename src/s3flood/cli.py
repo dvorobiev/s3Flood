@@ -122,6 +122,7 @@ def main():
     runp.add_argument("--max-retries", type=int, dest="max_retries", default=None, help="Максимальное количество повторов при ошибке (по умолчанию: 3)")
     runp.add_argument("--retry-backoff-base", type=float, dest="retry_backoff_base", default=None, help="Базовый множитель для экспоненциального backoff при повторах (по умолчанию: 2.0, т.е. задержки: 1s, 2s, 4s)")
     runp.add_argument("--order", choices=["sequential","random"], default=None, help="Порядок обработки файлов: sequential (сначала маленькие, потом средние, потом большие) или random (случайный порядок)")
+    runp.add_argument("--unique-remote-names", dest="unique_remote_names", action="store_true", default=None, help="Добавлять уникальный постфикс к имени объекта при загрузке (полезно для бесконечных прогонов, чтобы не перезаписывать предыдущие файлы)")
 
     args = parser.parse_args()
 
