@@ -1216,7 +1216,7 @@ def run_profile(args):
                     if mixed_phase_started:
                         phase_info = " [MIXED]"
                     else:
-                    phase_info = " [READ]"
+                        phase_info = " [READ]"
                     # В фазе чтения/mixed: подсвечиваем данные чтения (R:) зелёным, W: без стилей
                     # Разделяем на части для цветового выделения
                     w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
@@ -1244,7 +1244,7 @@ def run_profile(args):
                         files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
                         files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
                     else:
-                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
+                        w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
                     r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
                     w_bytes_part = f"W:{format_bytes(bytes_done)}"
                     r_bytes_part = f"R:{format_bytes(bytes_read)}"
@@ -1279,7 +1279,7 @@ def run_profile(args):
                         # В mixed фазе подсвечиваем оба
                         rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_CYAN)}"
                     else:
-                    rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
+                        rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)} | last {style(last_info, ANSI_BOLD, ANSI_GREEN)}"
                 else:
                     # В фазе записи: подсвечиваем W: зелёным, R: без стилей
                     w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
