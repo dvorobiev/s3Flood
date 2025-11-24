@@ -1317,13 +1317,19 @@ def run_profile(args):
                 styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
 
                 # История последних операций
-                display_recent = max(1, min(getattr(args, "threads", 1), 15))
-                recent_ops = metrics.get_recent_ops(display_recent)
-                if recent_ops:
+                recent_per_type = max(1, min(getattr(args, "threads", 1), 15))
+                history_depth = max(recent_per_type * 4, recent_per_type * 2)
+                recent_ops_snapshot = metrics.get_recent_ops(history_depth)
+                done_ops = [entry for entry in recent_ops_snapshot if entry.get("done")]
+                active_ops = [entry for entry in recent_ops_snapshot if not entry.get("done")]
+                done_section = done_ops[-recent_per_type:]
+                active_section = active_ops[-recent_per_type:]
+                display_ops = done_section + active_section
+                if display_ops:
                     recent_header = "Recent ops (latest bottom):"
                     plain_lines.append(recent_header)
                     styled_lines.append((recent_header, (ANSI_BOLD, ANSI_BLUE), False))
-                    for entry in recent_ops:
+                    for entry in display_ops:
                         icon = WRITE_ICON if entry["op"] == "upload" else READ_ICON
                         filename_disp = shorten_middle(entry["filename"], 32)
                         size_bytes = entry.get("bytes") or 0
