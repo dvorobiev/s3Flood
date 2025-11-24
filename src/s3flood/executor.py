@@ -773,8 +773,8 @@ def run_profile(args):
                 # Для write и read профилей: если очередь пуста, завершаем worker
                 # Для mixed профиля: если upload фаза завершена и очередь пуста, завершаем worker
                 if profile == "mixed-70-30":
-                if upload_phase_done.is_set() and q.empty():
-                    break
+                    if upload_phase_done.is_set() and q.empty():
+                        break
                 else:
                     if q.empty() and not getattr(args, "infinite", False):
                         break
