@@ -1,10 +1,11 @@
 """
-Интерактивное меню для s3flood с использованием textual.
+Интерактивное меню для s3flood с использованием rich.
 """
-from textual.app import App, ComposeResult
-from textual.containers import Container, Horizontal, Vertical
-from textual.widgets import Button, Header, Footer, Static, Input, Select, Checkbox, RadioSet, RadioButton
-from textual.binding import Binding
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt, Confirm
+from rich.table import Table
+from rich.text import Text
 from pathlib import Path
 import yaml
 from typing import Optional
@@ -15,145 +16,91 @@ from .executor import run_profile
 from .config import resolve_run_settings
 
 
-class MainMenu(App):
-    """Главное меню приложения."""
-    
-    CSS = """
-    Screen {
-        align: center middle;
-    }
-    
-    .menu-container {
-        width: 60;
-        height: auto;
-        border: solid $primary;
-        padding: 1;
-    }
-    
-    .menu-title {
-        text-align: center;
-        text-style: bold;
-        margin: 1;
-    }
-    
-    .menu-button {
-        width: 100%;
-        margin: 1;
-    }
-    """
-    
-    BINDINGS = [
-        Binding("q", "quit", "Выход", priority=True),
-    ]
-    
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        with Container(classes="menu-container"):
-            yield Static("s3flood — Interactive Menu", classes="menu-title")
-            with Vertical():
-                yield Button("🚀 Запустить тест", id="run-test", classes="menu-button")
-                yield Button("📦 Создать датасет", id="create-dataset", classes="menu-button")
-                yield Button("⚙️  Управление конфигами", id="manage-configs", classes="menu-button")
-                yield Button("🔍 Проверить конфиг", id="validate-config", classes="menu-button")
-                yield Button("📋 Просмотр метрик", id="view-metrics", classes="menu-button")
-                yield Button("❌ Выход", id="exit", classes="menu-button", variant="error")
-        yield Footer()
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        button_id = event.button.id
-        if button_id == "run-test":
-            self.push_screen(RunTestScreen())
-        elif button_id == "create-dataset":
-            self.push_screen(DatasetWizardScreen())
-        elif button_id == "manage-configs":
-            self.push_screen(ConfigManagerScreen())
-        elif button_id == "validate-config":
-            self.push_screen(ConfigValidatorScreen())
-        elif button_id == "view-metrics":
-            self.push_screen(MetricsViewerScreen())
-        elif button_id == "exit":
-            self.exit()
-    
-    def action_quit(self) -> None:
-        self.exit()
+console = Console()
 
 
-class RunTestScreen(App):
-    """Экран запуска теста."""
+def show_main_menu():
+    """Показывает главное меню и возвращает выбранный пункт."""
+    menu_text = Text()
+    menu_text.append("1. ", style="cyan")
+    menu_text.append("🚀 Запустить тест\n", style="white")
+    menu_text.append("2. ", style="cyan")
+    menu_text.append("📦 Создать датасет\n", style="white")
+    menu_text.append("3. ", style="cyan")
+    menu_text.append("⚙️  Управление конфигами\n", style="white")
+    menu_text.append("4. ", style="cyan")
+    menu_text.append("🔍 Проверить конфиг\n", style="white")
+    menu_text.append("5. ", style="cyan")
+    menu_text.append("📋 Просмотр метрик\n", style="white")
+    menu_text.append("6. ", style="cyan")
+    menu_text.append("❌ Выход\n", style="red")
     
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Запуск теста (заглушка)", id="title")
-        yield Button("Назад", id="back")
-        yield Footer()
+    panel = Panel(menu_text, title="[bold cyan]s3flood — Interactive Menu[/bold cyan]", border_style="cyan")
+    console.print(panel)
     
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.dismiss()
+    choice = Prompt.ask(
+        "\n[cyan]Выберите пункт[/cyan]",
+        choices=["1", "2", "3", "4", "5", "6"],
+        default="6"
+    )
+    return choice
 
 
-class DatasetWizardScreen(App):
-    """Мастер создания датасета."""
-    
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Создание датасета (заглушка)", id="title")
-        yield Button("Назад", id="back")
-        yield Footer()
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.dismiss()
+def run_test_menu():
+    """Меню запуска теста (заглушка)."""
+    console.print("\n[bold yellow]Запуск теста[/bold yellow]")
+    console.print("[dim]Функция в разработке...[/dim]\n")
+    input("Нажмите Enter для возврата в главное меню...")
 
 
-class ConfigManagerScreen(App):
-    """Управление конфигами."""
-    
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Управление конфигами (заглушка)", id="title")
-        yield Button("Назад", id="back")
-        yield Footer()
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.dismiss()
+def create_dataset_menu():
+    """Меню создания датасета (заглушка)."""
+    console.print("\n[bold yellow]Создание датасета[/bold yellow]")
+    console.print("[dim]Функция в разработке...[/dim]\n")
+    input("Нажмите Enter для возврата в главное меню...")
 
 
-class ConfigValidatorScreen(App):
-    """Проверка конфига."""
-    
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Проверка конфига (заглушка)", id="title")
-        yield Button("Назад", id="back")
-        yield Footer()
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.dismiss()
+def manage_configs_menu():
+    """Меню управления конфигами (заглушка)."""
+    console.print("\n[bold yellow]Управление конфигами[/bold yellow]")
+    console.print("[dim]Функция в разработке...[/dim]\n")
+    input("Нажмите Enter для возврата в главное меню...")
 
 
-class MetricsViewerScreen(App):
-    """Просмотр метрик."""
-    
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Просмотр метрик (заглушка)", id="title")
-        yield Button("Назад", id="back")
-        yield Footer()
-    
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back":
-            self.dismiss()
+def validate_config_menu():
+    """Меню проверки конфига (заглушка)."""
+    console.print("\n[bold yellow]Проверка конфига[/bold yellow]")
+    console.print("[dim]Функция в разработке...[/dim]\n")
+    input("Нажмите Enter для возврата в главное меню...")
+
+
+def view_metrics_menu():
+    """Меню просмотра метрик (заглушка)."""
+    console.print("\n[bold yellow]Просмотр метрик[/bold yellow]")
+    console.print("[dim]Функция в разработке...[/dim]\n")
+    input("Нажмите Enter для возврата в главное меню...")
 
 
 def run_interactive():
     """Запуск интерактивного меню."""
-    app = MainMenu()
-    app.run()
+    while True:
+        console.clear()
+        choice = show_main_menu()
+        
+        if choice == "1":
+            run_test_menu()
+        elif choice == "2":
+            create_dataset_menu()
+        elif choice == "3":
+            manage_configs_menu()
+        elif choice == "4":
+            validate_config_menu()
+        elif choice == "5":
+            view_metrics_menu()
+        elif choice == "6":
+            console.print("\n[green]До свидания![/green]\n")
+            break
 
 
 if __name__ == "__main__":
     run_interactive()
-
