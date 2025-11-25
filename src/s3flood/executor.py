@@ -708,14 +708,16 @@ def run_profile(args):
         if not data_root.exists():
             print(f"Data dir not found: {data_root}")
             return
-        
+
         files = gather_files(data_root)
         if not files:
             print(f"No dataset files found under {data_root}")
             return
-        
+
         try:
             files.sort(key=lambda p: p.stat().st_size)
+            jobs: list[Job] = []
+            groups = {}
             total_files = len(files)
             total_bytes = 0
             for p in files:
