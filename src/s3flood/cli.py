@@ -1,7 +1,9 @@
 import argparse
+import sys
 from .config import load_run_config, resolve_run_settings
 from .dataset import plan_and_generate
 from .executor import run_profile
+from .interactive import run_interactive
 
 
 def main():
@@ -29,7 +31,8 @@ def main():
         description="Минималистичный клиент для нагрузочного тестирования S3",
         epilog=top_level_epilog
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    parser.add_argument("--interactive", "-i", action="store_true", help="Запустить интерактивное меню")
+    sub = parser.add_subparsers(dest="cmd", required=False)
 
     dataset_create_epilog = """
 Примеры создания датасета:
@@ -125,6 +128,11 @@ def main():
     runp.add_argument("--unique-remote-names", dest="unique_remote_names", action="store_true", default=None, help="Добавлять уникальный постфикс к имени объекта при загрузке (полезно для бесконечных прогонов, чтобы не перезаписывать предыдущие файлы)")
 
     args = parser.parse_args()
+
+    # Запуск интерактивного меню, если указан флаг или нет команды
+    if args.interactive or args.cmd is None:
+        run_interactive()
+        return
 
     if args.cmd == "dataset-create":
         plan_and_generate(
