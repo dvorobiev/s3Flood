@@ -17,7 +17,7 @@ import shutil
 import csv
 import statistics
 from prompt_toolkit.completion import PathCompleter
-from typing import Optional
+from typing import Optional, Union
 
 from .config import load_run_config, RunConfigModel, resolve_run_settings
 from .dataset import plan_and_generate
@@ -770,25 +770,40 @@ def edit_config_menu():
 
     # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
     console.print("\n[bold]Настройки AWS CLI (опционально, переопределяют ~/.aws/config):[/bold]")
+    
+    # Функция для форматирования байтов в читаемый формат (MB или GB)
+    def _format_size_for_display(bytes_val: Union[int, str, None]) -> str:
+        if bytes_val is None:
+            return ""
+        if isinstance(bytes_val, str):
+            return bytes_val
+        # Конвертируем байты в MB или GB
+        mb = bytes_val / (1024 * 1024)
+        if mb >= 1024:
+            return f"{mb / 1024:.1f}GB"
+        return f"{int(mb)}MB"
+    
     multipart_threshold_val = data.get("aws_cli_multipart_threshold")
+    multipart_threshold_display = _format_size_for_display(multipart_threshold_val)
     multipart_threshold_str = questionary.text(
-        "aws_cli_multipart_threshold (порог для multipart, байты, например 5368709120 для 5GB):",
-        default=str(multipart_threshold_val) if multipart_threshold_val is not None else "",
+        "aws_cli_multipart_threshold (порог для multipart, MB или строка типа '5GB', '8MB'):",
+        default=multipart_threshold_display,
         validate=lambda v: (
-            v.strip() == "" or (v.isdigit() and int(v) > 0)
-        ) or "Введите целое число > 0 или оставьте пустым",
+            v.strip() == "" or validate_size_format(v)
+        ) or "Введите размер в формате MB (например, 5120) или строку типа '5GB', '8MB', или оставьте пустым",
     ).ask() or ""
-    aws_cli_multipart_threshold = int(multipart_threshold_str) if multipart_threshold_str.strip() else None
+    aws_cli_multipart_threshold = multipart_threshold_str.strip() if multipart_threshold_str.strip() else None
 
     multipart_chunksize_val = data.get("aws_cli_multipart_chunksize")
+    multipart_chunksize_display = _format_size_for_display(multipart_chunksize_val)
     multipart_chunksize_str = questionary.text(
-        "aws_cli_multipart_chunksize (размер чанка, байты, например 8388608 для 8MB):",
-        default=str(multipart_chunksize_val) if multipart_chunksize_val is not None else "",
+        "aws_cli_multipart_chunksize (размер чанка, MB или строка типа '8MB', '16MB'):",
+        default=multipart_chunksize_display,
         validate=lambda v: (
-            v.strip() == "" or (v.isdigit() and int(v) > 0)
-        ) or "Введите целое число > 0 или оставьте пустым",
+            v.strip() == "" or validate_size_format(v)
+        ) or "Введите размер в формате MB (например, 8) или строку типа '8MB', '16MB', или оставьте пустым",
     ).ask() or ""
-    aws_cli_multipart_chunksize = int(multipart_chunksize_str) if multipart_chunksize_str.strip() else None
+    aws_cli_multipart_chunksize = multipart_chunksize_str.strip() if multipart_chunksize_str.strip() else None
 
     max_concurrent_val = data.get("aws_cli_max_concurrent_requests")
     max_concurrent_str = questionary.text(

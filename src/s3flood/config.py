@@ -3,10 +3,12 @@ from __future__ import annotations
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+
+from .dataset import parse_size
 
 
 class RunConfigModel(BaseModel):
@@ -58,8 +60,9 @@ class RunConfigModel(BaseModel):
     order: Optional[str] = None  # sequential | random
     unique_remote_names: Optional[bool] = None
     # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
-    aws_cli_multipart_threshold: Optional[int] = Field(default=None, gt=0)  # порог для multipart в байтах
-    aws_cli_multipart_chunksize: Optional[int] = Field(default=None, gt=0)  # размер чанка в байтах
+    # Принимаем строки типа "5GB", "8MB" или числа (интерпретируются как MB)
+    aws_cli_multipart_threshold: Optional[Union[str, int]] = Field(default=None)  # порог для multipart (MB или строка типа "5GB")
+    aws_cli_multipart_chunksize: Optional[Union[str, int]] = Field(default=None)  # размер чанка (MB или строка типа "8MB")
     aws_cli_max_concurrent_requests: Optional[int] = Field(default=None, gt=0)  # максимальное количество параллельных запросов
 
 
@@ -184,8 +187,31 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     order = pick("order", default="sequential")
     
     # Настройки AWS CLI (переопределяют настройки из ~/.aws/config через переменные окружения)
-    aws_cli_multipart_threshold = pick("aws_cli_multipart_threshold")
-    aws_cli_multipart_chunksize = pick("aws_cli_multipart_chunksize")
+    # Конвертируем строки/числа в байты
+    def _parse_size_to_bytes(value: Union[str, int, None]) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            s = value.strip().lower()
+            # Если строка заканчивается на единицу измерения (kb, mb, gb) - парсим как есть
+            if any(s.endswith(u) for u in ["kb", "mb", "gb", "tb"]):
+                return parse_size(value)
+            # Если строка - просто число без единиц, интерпретируем как MB
+            try:
+                num = float(s)
+                return int(num * 1024 * 1024)
+            except ValueError:
+                # Если не число и не единица - пробуем parse_size (может быть просто число как строка)
+                return parse_size(value)
+        # Если число - интерпретируем как MB
+        return int(value * 1024 * 1024)
+    
+    aws_cli_multipart_threshold_raw = pick("aws_cli_multipart_threshold")
+    aws_cli_multipart_threshold = _parse_size_to_bytes(aws_cli_multipart_threshold_raw)
+    
+    aws_cli_multipart_chunksize_raw = pick("aws_cli_multipart_chunksize")
+    aws_cli_multipart_chunksize = _parse_size_to_bytes(aws_cli_multipart_chunksize_raw)
+    
     aws_cli_max_concurrent_requests = pick("aws_cli_max_concurrent_requests")
 
     return RunSettings(
