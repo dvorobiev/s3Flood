@@ -15,6 +15,7 @@
 - [ ] Расширенные метрики: P50/P90/P99 для всех операций, экспорт в Prometheus-совместимый формат.
 - [ ] Документация: примеры конфигов (`examples/configs/*.yaml`), подробные гайды по профилям, Quickstart Linux/Windows.
 - [ ] Поддержка чтения/записи с ограничениями IOPS/throughput, базовый throttling.
+- [ ] Настройки параметров AWS CLI: размер чанка (multipart chunk size), multipart threshold, max concurrent requests и другие параметры производительности.
 
 ### Низкий приоритет / дальше
 - [ ] PyInstaller/standalone сборки для Linux/Windows.
