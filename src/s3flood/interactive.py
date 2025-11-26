@@ -14,6 +14,8 @@ import threading
 import yaml
 import questionary
 import shutil
+import csv
+import statistics
 from prompt_toolkit.completion import PathCompleter
 from typing import Optional
 
@@ -1007,11 +1009,120 @@ def validate_config_menu():
 
 
 def view_metrics_menu():
-    """Меню просмотра метрик (заглушка)."""
+    """Меню просмотра метрик: базовый анализ CSV."""
     console.rule("[bold yellow]Просмотр метрик[/bold yellow]")
-    console.print("[dim]Функция в разработке...[/dim]\n")
-    # Пока просто возвращаемся в главное меню
-    return
+
+    cwd = Path(".").resolve()
+    csv_files = sorted(cwd.glob("*.csv"))
+    if not csv_files:
+        console.print("[yellow]В текущем каталоге нет CSV-файлов с метриками.[/yellow]\n")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        return
+
+    choices = [f.name for f in csv_files]
+    choices.append("Вернуться в главное меню")
+
+    choice = questionary.select(
+        "Выберите CSV с метриками:",
+        choices=choices,
+        use_indicator=True,
+    ).ask()
+    if not choice or choice == "Вернуться в главное меню":
+        return
+
+    metrics_path = cwd / choice
+
+    # Читаем CSV и считаем базовую статистику
+    ops = []
+    try:
+        with metrics_path.open("r", encoding="utf-8") as fh:
+            reader = csv.DictReader(fh)
+            for row in reader:
+                try:
+                    ts_start = float(row.get("ts_start", "0") or 0.0)
+                    ts_end = float(row.get("ts_end", "0") or 0.0)
+                    op = row.get("op") or ""
+                    bytes_v = int(row.get("bytes", "0") or 0)
+                    status = row.get("status") or ""
+                    latency_ms = float(row.get("latency_ms", "0") or 0.0)
+                    error = row.get("error") or ""
+                except ValueError:
+                    continue
+                duration_s = max(ts_end - ts_start, 0.0)
+                speed_MBps = (bytes_v / 1024 / 1024) / duration_s if duration_s > 0 else 0.0
+                ops.append(
+                    {
+                        "ts_start": ts_start,
+                        "ts_end": ts_end,
+                        "op": op,
+                        "bytes": bytes_v,
+                        "status": status,
+                        "latency_ms": latency_ms,
+                        "error": error,
+                        "duration_s": duration_s,
+                        "speed_MBps": speed_MBps,
+                    }
+                )
+    except OSError as exc:
+        console.print(f"[bold red]Не удалось прочитать файл метрик: {exc}[/bold red]")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        return
+
+    if not ops:
+        console.print("[yellow]В файле не найдено ни одной операции.[/yellow]\n")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        return
+
+    ts_min = min(o["ts_start"] for o in ops)
+    ts_max = max(o["ts_end"] for o in ops)
+    total_duration = max(ts_max - ts_min, 0.0)
+
+    total_bytes = sum(o["bytes"] for o in ops)
+    ok_ops = [o for o in ops if o["status"] == "ok"]
+    err_ops = [o for o in ops if o["status"] != "ok"]
+
+    ok_bytes = sum(o["bytes"] for o in ok_ops)
+
+    speeds = [o["speed_MBps"] for o in ok_ops if o["speed_MBps"] > 0]
+    avg_speed = sum(speeds) / len(speeds) if speeds else 0.0
+    median_speed = statistics.median(speeds) if speeds else 0.0
+    p90_speed = statistics.quantiles(speeds, n=10)[-1] if len(speeds) >= 10 else 0.0
+
+    console.print(f"\n[bold]Файл метрик:[/bold] [cyan]{metrics_path}[/cyan]\n")
+
+    summary = Table(show_header=False, box=None)
+    summary.add_column(style="cyan")
+    summary.add_column(style="white")
+    summary.add_row("Всего операций:", str(len(ops)))
+    summary.add_row("Успешных:", str(len(ok_ops)))
+    summary.add_row("С ошибкой:", str(len(err_ops)))
+    summary.add_row("Всего байт (успешные):", f"{ok_bytes / 1024 / 1024 / 1024:.2f} GB")
+    summary.add_row("Общая длительность:", f"{total_duration:.2f} s")
+    summary.add_row("Средняя скорость (по операциям):", f"{avg_speed:.1f} MB/s")
+    summary.add_row("Медиана по скорости:", f"{median_speed:.1f} MB/s")
+    summary.add_row("P90 по скорости:", f"{p90_speed:.1f} MB/s")
+    console.print(summary)
+
+    # Покажем топ-10 самых быстрых операций
+    top_n = 10
+    fast_ops = sorted(ok_ops, key=lambda o: o["speed_MBps"], reverse=True)[:top_n]
+    if fast_ops:
+        table = Table(title=f"Топ-{top_n} по скорости", box=None)
+        table.add_column("op", style="cyan")
+        table.add_column("size (GB)", justify="right")
+        table.add_column("duration (s)", justify="right")
+        table.add_column("speed (MB/s)", justify="right")
+        for o in fast_ops:
+            table.add_row(
+                o["op"],
+                f"{o['bytes'] / 1024 / 1024 / 1024:.2f}",
+                f"{o['duration_s']:.2f}",
+                f"{o['speed_MBps']:.1f}",
+            )
+        console.print()
+        console.print(table)
+
+    questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
 
 
 def run_interactive():
