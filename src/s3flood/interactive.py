@@ -19,7 +19,7 @@ from typing import Optional
 
 from .config import load_run_config, RunConfigModel, resolve_run_settings
 from .dataset import plan_and_generate
-from .executor import run_profile, aws_list_objects, _get_aws_env, get_spinner
+from .executor import run_profile, aws_list_objects, aws_check_bucket_access, _get_aws_env, get_spinner
 
 
 console = Console()
@@ -882,6 +882,35 @@ def validate_config_menu():
         return
 
     # Подключение к S3 и вывод первых 5 объектов
+    # Сначала отдельный быстрый тест доступа
+    console.print("\n[bold]Проверка доступа к бакету (head-bucket)...[/bold]")
+    try:
+        head_res = aws_check_bucket_access(
+            settings.bucket,
+            primary_endpoint,
+            settings.access_key,
+            settings.secret_key,
+            settings.aws_profile,
+        )
+    except Exception as exc:
+        console.print(f"[bold red]Ошибка при проверке доступа: {exc}[/bold red]")
+        head_res = None
+
+    if head_res is not None and head_res.returncode == 0:
+        console.print("[bold green]Доступ к бакету подтверждён (head-bucket успешен).[/bold green]")
+    else:
+        # Если команда отработала, но вернула ошибку — показываем stderr
+        msg = head_res.stderr.strip() if head_res is not None else ""
+        console.print(
+            "[bold red]Не удалось подтвердить доступ к бакету (head-bucket завершился с ошибкой).[/bold red]"
+        )
+        if msg:
+            console.print(f"[red]{msg}[/red]")
+        questionary.press_any_key_to_continue(
+            "Нажмите любую клавишу для возврата в меню..."
+        ).ask()
+        return
+
     console.print("\n[bold]Пробуем получить список объектов из бакета...[/bold]")
     try:
         objects = aws_list_objects(

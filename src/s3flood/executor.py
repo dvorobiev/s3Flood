@@ -547,6 +547,20 @@ def aws_list_objects(
         return None
 
 
+def aws_check_bucket_access(
+    bucket: str,
+    endpoint: str,
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+):
+    """Быстрая проверка доступа к бакету через s3api head-bucket."""
+    env = _get_aws_env(access_key, secret_key, aws_profile)
+    bucket_name = bucket.replace("s3://", "").split("/")[0]
+    cmd = ["aws", "s3api", "head-bucket", "--bucket", bucket_name, "--endpoint-url", endpoint]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
 def aws_cp_download(
     bucket: str,
     key: str,
