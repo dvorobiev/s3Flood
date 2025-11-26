@@ -63,6 +63,7 @@ class DotSpinner:
 
 def run_test_menu():
     """Меню запуска теста с выбором конфига и профиля."""
+    console.clear()
     console.rule("[bold yellow]Запустить тест[/bold yellow]")
 
     # Ищем YAML-конфиги в текущей директории
@@ -316,6 +317,7 @@ def validate_group_limits_format(value: str) -> bool:
 
 def create_dataset_menu():
     """Мастер создания датасета."""
+    console.clear()
     console.rule("[bold yellow]Создать датасет[/bold yellow]")
     
     # Путь к датасету
@@ -420,6 +422,7 @@ def create_dataset_menu():
 
 def create_config_wizard():
     """Мастер создания нового конфигурационного файла."""
+    console.clear()
     console.rule("[bold yellow]Создать новый конфиг[/bold yellow]")
 
     # Имя файла
@@ -587,9 +590,9 @@ def create_config_wizard():
 
 def manage_configs_menu():
     """Меню управления и проверки конфигов."""
-    console.rule("[bold yellow]Конфиги и проверка[/bold yellow]")
-
     while True:
+        console.clear()
+        console.rule("[bold yellow]Конфиги и проверка[/bold yellow]")
         choice = questionary.select(
             "Выберите действие:",
             choices=[
@@ -617,6 +620,7 @@ def manage_configs_menu():
 
 def edit_config_menu():
     """Интерактивное редактирование существующего конфига (основные поля)."""
+    console.clear()
     console.rule("[bold yellow]Редактировать конфиг[/bold yellow]")
 
     # Выбор конфига
@@ -796,6 +800,7 @@ def edit_config_menu():
 
 def validate_config_menu():
     """Меню проверки конфига: базовая валидация и работа с бакетом."""
+    console.clear()
     console.rule("[bold yellow]Проверить конфиг[/bold yellow]")
 
     # Выбор конфига (список config*.yml/yaml + ручной ввод)
@@ -1010,6 +1015,7 @@ def validate_config_menu():
 
 def view_metrics_menu():
     """Меню просмотра метрик: базовый анализ CSV."""
+    console.clear()
     console.rule("[bold yellow]Просмотр метрик[/bold yellow]")
 
     cwd = Path(".").resolve()
@@ -1128,6 +1134,7 @@ def view_metrics_menu():
 def run_interactive():
     """Запуск интерактивного меню."""
     while True:
+        console.clear()
         console.rule("[bold]Меню s3flood[/bold]")
         choice = questionary.select(
             "Выберите действие:",
