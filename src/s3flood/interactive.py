@@ -172,7 +172,77 @@ def run_test_menu():
     # Бакет и профиль
     summary_table.add_row("Bucket:", settings.bucket)
     summary_table.add_row("Профиль:", settings.profile)
+    summary_table.add_row("Data_dir:", settings.data_dir)
+    summary_table.add_row("Threads:", str(settings.threads))
+    summary_table.add_row("Infinite:", "yes" if settings.infinite else "no")
+    summary_table.add_row("unique_remote_names:", "yes" if settings.unique_remote_names else "no")
+    if settings.profile == "mixed":
+        summary_table.add_row("mixed_read_ratio:", str(settings.mixed_read_ratio))
     console.print(summary_table)
+
+    # Возможность переопределить ключевые параметры перед запуском
+    if questionary.confirm("Изменить параметры перед запуском?", default=False).ask():
+        # data_dir
+        data_dir_new = questionary.path(
+            "Каталог датасета (data_dir):",
+            default=str(settings.data_dir),
+            completer=path_completer,
+            validate=lambda p: Path(p).expanduser().is_dir() or "Каталог не существует",
+        ).ask()
+        if data_dir_new:
+            settings.data_dir = str(Path(data_dir_new).expanduser())
+
+        # threads
+        threads_str = questionary.text(
+            "Число потоков (threads):",
+            default=str(settings.threads),
+            validate=lambda v: (v.isdigit() and int(v) > 0) or "Введите целое число > 0",
+        ).ask()
+        if threads_str:
+            settings.threads = int(threads_str)
+
+        # infinite
+        infinite_new = questionary.confirm(
+            "Бесконечный режим (infinite)?",
+            default=bool(settings.infinite),
+        ).ask()
+        settings.infinite = bool(infinite_new)
+
+        # unique_remote_names
+        urn_new = questionary.confirm(
+            "Уникальные имена объектов (unique_remote_names)?",
+            default=bool(settings.unique_remote_names),
+        ).ask()
+        settings.unique_remote_names = bool(urn_new)
+
+        # mixed_read_ratio только для mixed
+        if settings.profile == "mixed":
+            mrr_default = settings.mixed_read_ratio if settings.mixed_read_ratio is not None else 0.7
+            mrr_str = questionary.text(
+                "mixed_read_ratio (0.0 - 1.0):",
+                default=str(mrr_default),
+                validate=lambda v: (
+                    v.strip() == ""
+                    or (v.replace(".", "", 1).isdigit() and 0.0 <= float(v) <= 1.0)
+                    or "Введите число от 0.0 до 1.0 или оставьте пустым"
+                ),
+            ).ask() or str(mrr_default)
+            if mrr_str.strip() != "":
+                settings.mixed_read_ratio = float(mrr_str)
+
+        console.print("\n[bold]Итоговые параметры запуска:[/bold]")
+        final_table = Table(show_header=False, box=None)
+        final_table.add_column(style="cyan")
+        final_table.add_column(style="white")
+        final_table.add_row("Bucket:", settings.bucket)
+        final_table.add_row("Профиль:", settings.profile)
+        final_table.add_row("Data_dir:", settings.data_dir)
+        final_table.add_row("Threads:", str(settings.threads))
+        final_table.add_row("Infinite:", "yes" if settings.infinite else "no")
+        final_table.add_row("unique_remote_names:", "yes" if settings.unique_remote_names else "no")
+        if settings.profile == "mixed":
+            final_table.add_row("mixed_read_ratio:", str(settings.mixed_read_ratio))
+        console.print(final_table)
 
     questionary.press_any_key_to_continue("Нажмите любую клавишу для запуска...").ask()
 
