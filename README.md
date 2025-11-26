@@ -172,6 +172,16 @@ docker run -d --name minio -p 9000:9000 -p 9001:9001 -e MINIO_ROOT_USER=minioadm
   - `sequential` — сначала маленькие файлы, потом средние, потом большие
   - `random` — случайный порядок обработки файлов
 
+#### Настройки AWS CLI
+
+Эти параметры переопределяют настройки из `~/.aws/config` через переменные окружения (имеют приоритет):
+
+- **`aws_cli_multipart_threshold`** (по умолчанию: `5368709120` = 5GB): Порог размера файла в байтах, при превышении которого используется multipart upload
+- **`aws_cli_multipart_chunksize`** (опционально): Размер чанка для multipart upload в байтах (по умолчанию AWS CLI использует 8MB)
+- **`aws_cli_max_concurrent_requests`** (опционально): Максимальное количество параллельных запросов при multipart upload
+
+> **Примечание**: Настройки из конфига s3flood имеют приоритет над настройками из `~/.aws/config`, так как устанавливаются через переменные окружения `AWS_CLI_FILE_TRANSFER_CONFIG`.
+
 #### Пояснения к метрикам
 
 - **`queue N tasks`**: Количество задач в очереди ожидания (сколько файлов ждут обработки)
@@ -200,6 +210,10 @@ run:
   pattern: sustained
   max_retries: 3
   retry_backoff_base: 2.0
+  # Настройки AWS CLI (переопределяют ~/.aws/config)
+  # aws_cli_multipart_threshold: 5368709120  # 5GB
+  # aws_cli_multipart_chunksize: 8388608  # 8MB
+  # aws_cli_max_concurrent_requests: 10
 ```
 
 ### Кластерный режим
