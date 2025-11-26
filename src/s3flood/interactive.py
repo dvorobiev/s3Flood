@@ -19,7 +19,7 @@ from typing import Optional
 
 from .config import load_run_config, RunConfigModel, resolve_run_settings
 from .dataset import plan_and_generate
-from .executor import run_profile, aws_list_objects, _get_aws_env
+from .executor import run_profile, aws_list_objects, _get_aws_env, get_spinner
 
 
 console = Console()
@@ -36,7 +36,8 @@ class DotSpinner:
 
     def __enter__(self):
         if self._message:
-            console.print(self._message, end="", style="dim")
+            # Сообщение — отдельной строкой, чтобы не мешать другим выводам
+            console.print(self._message, style="dim")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self
@@ -46,14 +47,16 @@ class DotSpinner:
         if self._thread is not None:
             self._thread.join()
         # Перенос строки после спиннера
-        console.print()
+        console.file.write("\n")
+        console.file.flush()
 
     def _run(self):
         while not self._stop.is_set():
-            console.print(".", end="", style="dim", soft_wrap=False)
+            # Используем тот же спиннер, что и в дашборде
+            frame = get_spinner()
+            console.print(frame, end="\r", soft_wrap=False)
             console.file.flush()
-            # Небольшая пауза между точками
-            time.sleep(0.3)
+            time.sleep(0.1)
 
 
 def run_test_menu():
@@ -173,10 +176,9 @@ def run_test_menu():
 
     questionary.press_any_key_to_continue("Нажмите любую клавишу для запуска...").ask()
 
-    # Запуск профиля
+    # Запуск профиля (у самого теста уже есть свой спиннер в дашборде)
     try:
-        with DotSpinner("Выполнение профиля"):
-            run_profile(settings.to_namespace())
+        run_profile(settings.to_namespace())
     except KeyboardInterrupt:
         console.print("\n[bold yellow]Остановка по запросу пользователя.[/bold yellow]")
     except Exception as exc:
@@ -537,6 +539,187 @@ def manage_configs_menu():
             validate_config_menu()
         elif choice.startswith("Редактировать"):
             edit_config_menu()
+        else:
+            return
+
+
+def edit_config_menu():
+    """Интерактивное редактирование существующего конфига (основные поля)."""
+    console.rule("[bold yellow]Редактировать конфиг[/bold yellow]")
+
+    # Выбор конфига
+    cwd = Path(".").resolve()
+    configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
+    choices = [str(cfg.name) for cfg in configs]
+    choices.append("Ввести путь вручную")
+    choices.append("Вернуться в главное меню")
+
+    choice = questionary.select(
+        "Выберите конфиг для редактирования:",
+        choices=choices,
+        use_indicator=True,
+    ).ask()
+    if not choice or choice == "Вернуться в главное меню":
+        return
+
+    if choice == "Ввести путь вручную":
+        path_str = questionary.path(
+            "Путь к YAML-конфигу:",
+            completer=path_completer,
+            validate=lambda p: Path(p).is_file() or "Файл не найден",
+        ).ask()
+        if not path_str:
+            return
+        cfg_path = Path(path_str).expanduser()
+    else:
+        cfg_path = cwd / choice
+
+    # Загрузка и преобразование в dict
+    try:
+        cfg_model = load_run_config(str(cfg_path))
+    except Exception as e:
+        console.print(f"[bold red]Не удалось прочитать или разобрать конфиг: {e}[/bold red]")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        return
+
+    data = cfg_model.model_dump()
+
+    console.print(f"[bold]Редактирование конфига:[/bold] [cyan]{cfg_path}[/cyan]\n")
+
+    # Профиль нагрузки (хотя обычно переопределяется при запуске)
+    profile_default = data.get("profile") or "write"
+    profile = questionary.select(
+        "Профиль нагрузки:",
+        choices=["write", "read", "mixed"],
+        default=profile_default if profile_default in ["write", "read", "mixed"] else "write",
+    ).ask() or profile_default
+
+    # Endpoint / endpoints
+    endpoint_default = data.get("endpoint") or ""
+    endpoints_default_list = data.get("endpoints") or []
+    endpoints_default = ",".join(endpoints_default_list)
+    endpoint_mode_default = data.get("endpoint_mode") or "round-robin"
+
+    mode = questionary.select(
+        "Режим подключения:",
+        choices=["Один endpoint", "Кластер (несколько endpoints)"],
+        default="Кластер (несколько endpoints)" if endpoints_default_list else "Один endpoint",
+    ).ask()
+    if not mode:
+        return
+
+    if mode.startswith("Кластер"):
+        endpoints_str = questionary.text(
+            "Endpoints (через запятую):",
+            default=endpoints_default or "http://localhost:9000",
+        ).ask() or endpoints_default
+        endpoints = [e.strip() for e in endpoints_str.split(",") if e.strip()]
+        endpoint = None
+        endpoint_mode = questionary.select(
+            "Стратегия выбора endpoint:",
+            choices=["round-robin", "random"],
+            default=endpoint_mode_default if endpoint_mode_default in ["round-robin", "random"] else "round-robin",
+        ).ask() or endpoint_mode_default
+    else:
+        endpoint = questionary.text(
+            "Endpoint (например, http://localhost:9000):",
+            default=endpoint_default or "http://localhost:9000",
+        ).ask() or endpoint_default
+        # если один endpoint — список endpoints и режим очищаем
+        endpoints = []
+        endpoint_mode = None
+
+    # Бакет и базовые параметры
+    bucket = questionary.text(
+        "Bucket:",
+        default=data.get("bucket") or "",
+    ).ask() or data.get("bucket") or ""
+
+    threads_str = questionary.text(
+        "Число потоков:",
+        default=str(data.get("threads") or 8),
+        validate=lambda v: (v.isdigit() and int(v) > 0) or "Введите целое число > 0",
+    ).ask()
+    threads_int = int(threads_str) if threads_str else (data.get("threads") or 8)
+
+    data_dir = questionary.text(
+        "Каталог датасета (data_dir):",
+        default=data.get("data_dir") or "./loadset/data",
+    ).ask() or data.get("data_dir") or "./loadset/data"
+
+    infinite = questionary.confirm(
+        "Бесконечный режим (infinite):",
+        default=bool(data.get("infinite")),
+    ).ask()
+
+    mixed_read_ratio_default = data.get("mixed_read_ratio")
+    if mixed_read_ratio_default is None:
+        mixed_read_ratio_default = 0.7
+    mixed_ratio_str = questionary.text(
+        "mixed_read_ratio (0.0 - 1.0):",
+        default=str(mixed_read_ratio_default),
+        validate=lambda v: (
+            v.strip() == ""
+            or (v.replace(".", "", 1).isdigit() and 0.0 <= float(v) <= 1.0)
+            or "Введите число от 0.0 до 1.0 или оставьте пустым"
+        ),
+    ).ask() or str(mixed_read_ratio_default)
+    mixed_ratio = mixed_read_ratio_default if mixed_ratio_str.strip() == "" else float(mixed_ratio_str)
+
+    unique_remote_names = questionary.confirm(
+        "unique_remote_names (уникальные имена объектов):",
+        default=bool(data.get("unique_remote_names")),
+    ).ask()
+
+    # Обновляем структуру
+    updated = dict(data)
+    updated["profile"] = profile
+    updated["bucket"] = bucket
+    updated["threads"] = threads_int
+    updated["data_dir"] = data_dir
+    updated["infinite"] = bool(infinite)
+    updated["mixed_read_ratio"] = mixed_ratio
+    updated["unique_remote_names"] = bool(unique_remote_names)
+
+    if endpoint:
+        updated["endpoint"] = endpoint
+        updated["endpoints"] = None
+        updated["endpoint_mode"] = None
+    else:
+        updated["endpoint"] = None
+        updated["endpoints"] = endpoints
+        updated["endpoint_mode"] = endpoint_mode
+
+    # Итоговая сводка
+    console.print("\n[bold]Обновлённые параметры:[/bold]")
+    table = Table(show_header=False, box=None)
+    table.add_column(style="cyan")
+    table.add_column(style="white")
+    table.add_row("profile", str(updated.get("profile")))
+    table.add_row("bucket", str(updated.get("bucket")))
+    table.add_row("endpoint", str(updated.get("endpoint") or ""))
+    table.add_row("endpoints", ", ".join(updated.get("endpoints") or []))
+    table.add_row("endpoint_mode", str(updated.get("endpoint_mode") or ""))
+    table.add_row("threads", str(updated.get("threads")))
+    table.add_row("data_dir", str(updated.get("data_dir")))
+    table.add_row("infinite", str(updated.get("infinite")))
+    table.add_row("mixed_read_ratio", str(updated.get("mixed_read_ratio")))
+    table.add_row("unique_remote_names", str(updated.get("unique_remote_names")))
+    console.print(table)
+
+    if not questionary.confirm("\nСохранить изменения в этом конфиге?", default=True).ask():
+        console.print("[yellow]Изменения отменены.[/yellow]")
+        return
+
+    try:
+        out = {"run": {k: v for k, v in updated.items() if v is not None}}
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(out, f, sort_keys=False, allow_unicode=True)
+        console.print(f"[bold green]✅ Конфиг обновлён: {cfg_path}[/bold green]")
+    except Exception as e:
+        console.print(f"[bold red]Ошибка при сохранении конфига: {e}[/bold red]")
+
+    questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
 
 
 def validate_config_menu():
@@ -642,10 +825,24 @@ def validate_config_menu():
         console.print(f"[bold red]Ошибка при запросе списка объектов: {exc}[/bold red]")
         objects = None
 
-    if not objects:
-        console.print("[yellow]Объекты не найдены или не удалось получить список.[/yellow]")
-        # Нечего удалять или нет уверенности в списке — не предлагаем destructive-опции
-        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+    # Разделяем ситуации: ошибка / пустой список / есть объекты
+    if objects is None:
+        console.print(
+            "[yellow]Не удалось получить список объектов (возможна проблема с доступом или AWS CLI).[/yellow]"
+        )
+        questionary.press_any_key_to_continue(
+            "Нажмите любую клавишу для возврата в меню..."
+        ).ask()
+        return
+
+    if len(objects) == 0:
+        console.print(
+            "[green]Подключение к бакету и endpoint успешно,[/green] "
+            "[yellow]но в бакете сейчас нет ни одного объекта.[/yellow]"
+        )
+        questionary.press_any_key_to_continue(
+            "Нажмите любую клавишу для возврата в меню..."
+        ).ask()
         return
 
     console.print(f"[green]Найдено объектов:[/green] {len(objects)}")
