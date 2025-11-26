@@ -662,13 +662,25 @@ def edit_config_menu():
 
     console.print(f"[bold]Редактирование конфига:[/bold] [cyan]{cfg_path}[/cyan]\n")
 
-    # Профиль нагрузки (хотя обычно переопределяется при запуске)
-    profile_default = data.get("profile") or "write"
-    profile = questionary.select(
-        "Профиль нагрузки:",
-        choices=["write", "read", "mixed"],
-        default=profile_default if profile_default in ["write", "read", "mixed"] else "write",
-    ).ask() or profile_default
+    # Сводка текущих настроек (без профиля нагрузки — он выбирается при запуске)
+    summary = Table(show_header=False, box=None)
+    summary.add_column(style="cyan")
+    summary.add_column(style="white")
+    summary.add_row("bucket", str(data.get("bucket") or ""))
+    summary.add_row("endpoint", str(data.get("endpoint") or ""))
+    endpoints_list = data.get("endpoints") or []
+    summary.add_row("endpoints", ", ".join(str(e) for e in endpoints_list))
+    summary.add_row("endpoint_mode", str(data.get("endpoint_mode") or ""))
+    summary.add_row("threads", str(data.get("threads") or ""))
+    summary.add_row("data_dir", str(data.get("data_dir") or ""))
+    summary.add_row("report", str(data.get("report") or ""))
+    summary.add_row("metrics", str(data.get("metrics") or ""))
+    summary.add_row("infinite", str(data.get("infinite") or "False"))
+    summary.add_row("mixed_read_ratio", str(data.get("mixed_read_ratio") or ""))
+    summary.add_row("unique_remote_names", str(data.get("unique_remote_names") or "False"))
+    summary.add_row("order", str(data.get("order") or "sequential"))
+    console.print(summary)
+    console.print()  # пустая строка перед вопросами
 
     # Endpoint / endpoints
     endpoint_default = data.get("endpoint") or ""
@@ -747,9 +759,9 @@ def edit_config_menu():
         default=bool(data.get("unique_remote_names")),
     ).ask()
 
-    # Обновляем структуру
+    # Обновляем структуру (профиль нагрузки из конфига игнорируем, он выбирается при запуске)
     updated = dict(data)
-    updated["profile"] = profile
+    updated.pop("profile", None)
     updated["bucket"] = bucket
     updated["threads"] = threads_int
     updated["data_dir"] = data_dir
@@ -771,7 +783,6 @@ def edit_config_menu():
     table = Table(show_header=False, box=None)
     table.add_column(style="cyan")
     table.add_column(style="white")
-    table.add_row("profile", str(updated.get("profile")))
     table.add_row("bucket", str(updated.get("bucket")))
     table.add_row("endpoint", str(updated.get("endpoint") or ""))
     table.add_row("endpoints", ", ".join(updated.get("endpoints") or []))
