@@ -682,6 +682,12 @@ def edit_config_menu():
     summary.add_row("burst_duration_sec", str(data.get("burst_duration_sec") or ""))
     summary.add_row("burst_intensity_multiplier", str(data.get("burst_intensity_multiplier") or ""))
     summary.add_row("order", str(data.get("order") or "sequential"))
+    if data.get("aws_cli_multipart_threshold") is not None:
+        summary.add_row("aws_cli_multipart_threshold", str(data.get("aws_cli_multipart_threshold")))
+    if data.get("aws_cli_multipart_chunksize") is not None:
+        summary.add_row("aws_cli_multipart_chunksize", str(data.get("aws_cli_multipart_chunksize")))
+    if data.get("aws_cli_max_concurrent_requests") is not None:
+        summary.add_row("aws_cli_max_concurrent_requests", str(data.get("aws_cli_max_concurrent_requests")))
     console.print(summary)
     console.print()  # пустая строка перед вопросами
 
@@ -762,6 +768,38 @@ def edit_config_menu():
         default=bool(data.get("unique_remote_names")),
     ).ask()
 
+    # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
+    console.print("\n[bold]Настройки AWS CLI (опционально, переопределяют ~/.aws/config):[/bold]")
+    multipart_threshold_val = data.get("aws_cli_multipart_threshold")
+    multipart_threshold_str = questionary.text(
+        "aws_cli_multipart_threshold (порог для multipart, байты, например 5368709120 для 5GB):",
+        default=str(multipart_threshold_val) if multipart_threshold_val is not None else "",
+        validate=lambda v: (
+            v.strip() == "" or (v.isdigit() and int(v) > 0)
+        ) or "Введите целое число > 0 или оставьте пустым",
+    ).ask() or ""
+    aws_cli_multipart_threshold = int(multipart_threshold_str) if multipart_threshold_str.strip() else None
+
+    multipart_chunksize_val = data.get("aws_cli_multipart_chunksize")
+    multipart_chunksize_str = questionary.text(
+        "aws_cli_multipart_chunksize (размер чанка, байты, например 8388608 для 8MB):",
+        default=str(multipart_chunksize_val) if multipart_chunksize_val is not None else "",
+        validate=lambda v: (
+            v.strip() == "" or (v.isdigit() and int(v) > 0)
+        ) or "Введите целое число > 0 или оставьте пустым",
+    ).ask() or ""
+    aws_cli_multipart_chunksize = int(multipart_chunksize_str) if multipart_chunksize_str.strip() else None
+
+    max_concurrent_val = data.get("aws_cli_max_concurrent_requests")
+    max_concurrent_str = questionary.text(
+        "aws_cli_max_concurrent_requests (макс. параллельных запросов, например 10):",
+        default=str(max_concurrent_val) if max_concurrent_val is not None else "",
+        validate=lambda v: (
+            v.strip() == "" or (v.isdigit() and int(v) > 0)
+        ) or "Введите целое число > 0 или оставьте пустым",
+    ).ask() or ""
+    aws_cli_max_concurrent_requests = int(max_concurrent_str) if max_concurrent_str.strip() else None
+
     # Паттерн нагрузки
     pattern_default = data.get("pattern") or "sustained"
     pattern = questionary.select(
@@ -812,6 +850,18 @@ def edit_config_menu():
     updated["pattern"] = pattern
     updated["burst_duration_sec"] = burst_duration_sec
     updated["burst_intensity_multiplier"] = burst_intensity_multiplier
+    if aws_cli_multipart_threshold is not None:
+        updated["aws_cli_multipart_threshold"] = aws_cli_multipart_threshold
+    else:
+        updated.pop("aws_cli_multipart_threshold", None)
+    if aws_cli_multipart_chunksize is not None:
+        updated["aws_cli_multipart_chunksize"] = aws_cli_multipart_chunksize
+    else:
+        updated.pop("aws_cli_multipart_chunksize", None)
+    if aws_cli_max_concurrent_requests is not None:
+        updated["aws_cli_max_concurrent_requests"] = aws_cli_max_concurrent_requests
+    else:
+        updated.pop("aws_cli_max_concurrent_requests", None)
 
     if endpoint:
         updated["endpoint"] = endpoint
@@ -839,6 +889,12 @@ def edit_config_menu():
     table.add_row("pattern", str(updated.get("pattern")))
     table.add_row("burst_duration_sec", str(updated.get("burst_duration_sec")))
     table.add_row("burst_intensity_multiplier", str(updated.get("burst_intensity_multiplier")))
+    if updated.get("aws_cli_multipart_threshold") is not None:
+        table.add_row("aws_cli_multipart_threshold", str(updated.get("aws_cli_multipart_threshold")))
+    if updated.get("aws_cli_multipart_chunksize") is not None:
+        table.add_row("aws_cli_multipart_chunksize", str(updated.get("aws_cli_multipart_chunksize")))
+    if updated.get("aws_cli_max_concurrent_requests") is not None:
+        table.add_row("aws_cli_max_concurrent_requests", str(updated.get("aws_cli_max_concurrent_requests")))
     console.print(table)
 
     if not questionary.confirm("\nСохранить изменения в этом конфиге?", default=True).ask():
@@ -958,6 +1014,9 @@ def validate_config_menu():
             settings.access_key,
             settings.secret_key,
             settings.aws_profile,
+            settings.aws_cli_multipart_threshold,
+            settings.aws_cli_multipart_chunksize,
+            settings.aws_cli_max_concurrent_requests,
         )
     except Exception as exc:
         console.print(f"[bold red]Ошибка при проверке доступа: {exc}[/bold red]")
@@ -1011,6 +1070,9 @@ def validate_config_menu():
             settings.access_key,
             settings.secret_key,
             settings.aws_profile,
+            settings.aws_cli_multipart_threshold,
+            settings.aws_cli_multipart_chunksize,
+            settings.aws_cli_max_concurrent_requests,
         )
     except Exception as exc:
         console.print(f"[bold red]Ошибка при запросе списка объектов: {exc}[/bold red]")

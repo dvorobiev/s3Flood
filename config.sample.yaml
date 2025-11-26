@@ -35,4 +35,8 @@ run:
   order: random  # sequential (сначала маленькие) или random (случайный порядок)
   # Уникальные имена объектов в бакете (добавляет постфикс и не перезаписывает предыдущие файлы)
   unique_remote_names: false
+  # Настройки AWS CLI (переопределяют настройки из ~/.aws/config через переменные окружения)
+  # aws_cli_multipart_threshold: 5368709120  # Порог для multipart upload в байтах (по умолчанию 5GB)
+  # aws_cli_multipart_chunksize: 8388608  # Размер чанка для multipart в байтах (по умолчанию 8MB)
+  # aws_cli_max_concurrent_requests: 10  # Максимальное количество параллельных запросов
 

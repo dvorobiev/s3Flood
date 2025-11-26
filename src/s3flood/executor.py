@@ -471,14 +471,32 @@ class Metrics:
         return out
 
 
-def _get_aws_env(access_key: str | None, secret_key: str | None, aws_profile: str | None) -> dict:
+def _get_aws_env(
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
+) -> dict:
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
     # Отключаем автоматические checksums для совместимости с S3-совместимыми бекендами
     # (начиная с boto3 1.36.0 checksums включены по умолчанию, что может вызывать BadDigest)
     env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
-    # Устанавливаем высокий порог multipart, чтобы избежать multipart upload для большинства файлов
-    env["AWS_CLI_FILE_TRANSFER_CONFIG"] = '{"multipart_threshold": 5368709120}'
+    # Формируем конфигурацию AWS CLI (переопределяет настройки из ~/.aws/config)
+    # Переменные окружения имеют приоритет над конфигом
+    transfer_config = {}
+    if multipart_threshold is not None:
+        transfer_config["multipart_threshold"] = multipart_threshold
+    else:
+        # Дефолтное значение: 5GB (чтобы избежать multipart для большинства файлов)
+        transfer_config["multipart_threshold"] = 5368709120
+    if multipart_chunksize is not None:
+        transfer_config["multipart_chunksize"] = multipart_chunksize
+    if max_concurrent_requests is not None:
+        transfer_config["max_concurrent_requests"] = max_concurrent_requests
+    env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_config)
     if aws_profile:
         env["AWS_PROFILE"] = aws_profile
         env.pop("AWS_ACCESS_KEY_ID", None)
@@ -501,8 +519,14 @@ def aws_cp_upload(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
-    env = _get_aws_env(access_key, secret_key, aws_profile)
+    env = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
     try:
         size_bytes = local.stat().st_size
     except OSError:
@@ -525,9 +549,15 @@ def aws_list_objects(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
     """Получает список объектов из бакета через s3api list-objects-v2."""
-    env = _get_aws_env(access_key, secret_key, aws_profile)
+    env = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket_name, "--endpoint-url", endpoint]
     res = subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -553,9 +583,15 @@ def aws_check_bucket_access(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
     """Быстрая проверка доступа к бакету через s3api head-bucket."""
-    env = _get_aws_env(access_key, secret_key, aws_profile)
+    env = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "head-bucket", "--bucket", bucket_name, "--endpoint-url", endpoint]
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
@@ -568,8 +604,14 @@ def aws_cp_download(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
-    env = _get_aws_env(access_key, secret_key, aws_profile)
+    env = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
     # Используем s3api get-object вместо s3 cp, чтобы избежать ошибки обновления времени модификации /dev/null
     devnull = "NUL" if os.name == "nt" else "/dev/null"
     # Извлекаем имя бакета без префикса s3://
@@ -910,6 +952,9 @@ def run_profile(args):
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
+                    getattr(args, "aws_cli_multipart_threshold", None),
+                    getattr(args, "aws_cli_multipart_chunksize", None),
+                    getattr(args, "aws_cli_max_concurrent_requests", None),
                 )
                 if not ok and res is None:
                     err = err or "retry failed"
@@ -952,6 +997,9 @@ def run_profile(args):
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
+                    getattr(args, "aws_cli_multipart_threshold", None),
+                    getattr(args, "aws_cli_multipart_chunksize", None),
+                    getattr(args, "aws_cli_max_concurrent_requests", None),
                 )
                 end = time.time()
                 # Детальная диагностика для отладки

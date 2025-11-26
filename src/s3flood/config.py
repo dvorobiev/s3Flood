@@ -57,6 +57,10 @@ class RunConfigModel(BaseModel):
     # Порядок обработки файлов
     order: Optional[str] = None  # sequential | random
     unique_remote_names: Optional[bool] = None
+    # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
+    aws_cli_multipart_threshold: Optional[int] = Field(default=None, gt=0)  # порог для multipart в байтах
+    aws_cli_multipart_chunksize: Optional[int] = Field(default=None, gt=0)  # размер чанка в байтах
+    aws_cli_max_concurrent_requests: Optional[int] = Field(default=None, gt=0)  # максимальное количество параллельных запросов
 
 
 @dataclass
@@ -84,6 +88,9 @@ class RunSettings:
     retry_backoff_base: Optional[float]
     order: Optional[str]
     unique_remote_names: bool
+    aws_cli_multipart_threshold: Optional[int]
+    aws_cli_multipart_chunksize: Optional[int]
+    aws_cli_max_concurrent_requests: Optional[int]
 
     def to_namespace(self) -> Namespace:
         return Namespace(**asdict(self))
@@ -175,6 +182,11 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     
     # Порядок обработки файлов
     order = pick("order", default="sequential")
+    
+    # Настройки AWS CLI (переопределяют настройки из ~/.aws/config через переменные окружения)
+    aws_cli_multipart_threshold = pick("aws_cli_multipart_threshold")
+    aws_cli_multipart_chunksize = pick("aws_cli_multipart_chunksize")
+    aws_cli_max_concurrent_requests = pick("aws_cli_max_concurrent_requests")
 
     return RunSettings(
         profile=profile,
@@ -200,5 +212,8 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         retry_backoff_base=retry_backoff_base,
         order=order,
         unique_remote_names=unique_remote_names,
+        aws_cli_multipart_threshold=aws_cli_multipart_threshold,
+        aws_cli_multipart_chunksize=aws_cli_multipart_chunksize,
+        aws_cli_max_concurrent_requests=aws_cli_max_concurrent_requests,
     )
 
