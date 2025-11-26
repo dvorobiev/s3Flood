@@ -64,7 +64,7 @@ class DotSpinner:
 def run_test_menu():
     """Меню запуска теста с выбором конфига и профиля."""
     console.clear()
-    console.rule("[bold yellow]Запустить тест[/bold yellow]")
+    console.rule("[bold yellow]🚀 Запустить тест[/bold yellow]")
 
     # Ищем YAML-конфиги в текущей директории
     cwd = Path(".").resolve()
@@ -96,17 +96,17 @@ def run_test_menu():
     profile = questionary.select(
         "Выберите профиль нагрузки:",
         choices=[
-            "write — только запись",
-            "read  — только чтение",
-            "mixed — смешанный профиль",
+            "🔺 write — только запись",
+            "🔻 read  — только чтение",
+            "🔀 mixed — смешанный профиль",
         ],
     ).ask()
     if not profile:
         return
 
-    if profile.startswith("write"):
+    if profile.startswith("🔺"):
         profile_value = "write"
-    elif profile.startswith("read"):
+    elif profile.startswith("🔻"):
         profile_value = "read"
     else:
         profile_value = "mixed"
@@ -318,7 +318,7 @@ def validate_group_limits_format(value: str) -> bool:
 def create_dataset_menu():
     """Мастер создания датасета."""
     console.clear()
-    console.rule("[bold yellow]Создать датасет[/bold yellow]")
+    console.rule("[bold yellow]📦 Создать датасет[/bold yellow]")
     
     # Путь к датасету
     path = questionary.path(
@@ -423,7 +423,7 @@ def create_dataset_menu():
 def create_config_wizard():
     """Мастер создания нового конфигурационного файла."""
     console.clear()
-    console.rule("[bold yellow]Создать новый конфиг[/bold yellow]")
+    console.rule("[bold yellow]📝 Создать новый конфиг[/bold yellow]")
 
     # Имя файла
     default_name = "config.new.yaml"
@@ -592,27 +592,27 @@ def manage_configs_menu():
     """Меню управления и проверки конфигов."""
     while True:
         console.clear()
-        console.rule("[bold yellow]Конфиги и проверка[/bold yellow]")
+        console.rule("[bold yellow]🧩 Конфиги и проверка[/bold yellow]")
         choice = questionary.select(
             "Выберите действие:",
             choices=[
-                "Создать новый конфиг",
-                "Проверить / управлять конфигом",
-                "Редактировать существующий конфиг",
+                "📝 Создать новый конфиг",
+                "🔍 Проверить / управлять конфигом",
+                "✏️ Редактировать существующий конфиг",
                 questionary.Separator(),
-                "Вернуться в главное меню",
+                "⬅️ Вернуться в главное меню",
             ],
             use_indicator=True,
         ).ask()
 
-        if not choice or choice == "Вернуться в главное меню":
+        if not choice or choice.startswith("⬅️"):
             return
 
-        if choice.startswith("Создать"):
+        if choice.startswith("📝"):
             create_config_wizard()
-        elif choice.startswith("Проверить"):
+        elif choice.startswith("🔍"):
             validate_config_menu()
-        elif choice.startswith("Редактировать"):
+        elif choice.startswith("✏️"):
             edit_config_menu()
         else:
             return
@@ -621,24 +621,24 @@ def manage_configs_menu():
 def edit_config_menu():
     """Интерактивное редактирование существующего конфига (основные поля)."""
     console.clear()
-    console.rule("[bold yellow]Редактировать конфиг[/bold yellow]")
+    console.rule("[bold yellow]✏️ Редактировать конфиг[/bold yellow]")
 
     # Выбор конфига
     cwd = Path(".").resolve()
     configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
     choices = [str(cfg.name) for cfg in configs]
-    choices.append("Ввести путь вручную")
-    choices.append("Вернуться в главное меню")
+    choices.append("📂 Ввести путь вручную")
+    choices.append("⬅️ Вернуться в главное меню")
 
     choice = questionary.select(
         "Выберите конфиг для редактирования:",
         choices=choices,
         use_indicator=True,
     ).ask()
-    if not choice or choice == "Вернуться в главное меню":
+    if not choice or choice.startswith("⬅️"):
         return
 
-    if choice == "Ввести путь вручную":
+    if choice.startswith("📂"):
         path_str = questionary.path(
             "Путь к YAML-конфигу:",
             completer=path_completer,
@@ -859,24 +859,24 @@ def edit_config_menu():
 def validate_config_menu():
     """Меню проверки конфига: базовая валидация и работа с бакетом."""
     console.clear()
-    console.rule("[bold yellow]Проверить конфиг[/bold yellow]")
+    console.rule("[bold yellow]🔍 Проверить конфиг[/bold yellow]")
 
     # Выбор конфига (список config*.yml/yaml + ручной ввод)
     cwd = Path(".").resolve()
     configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
     choices = [str(cfg.name) for cfg in configs]
-    choices.append("Ввести путь вручную")
-    choices.append("Вернуться в главное меню")
+    choices.append("📂 Ввести путь вручную")
+    choices.append("⬅️ Вернуться в главное меню")
 
     choice = questionary.select(
         "Выберите конфиг:",
         choices=choices,
         use_indicator=True,
     ).ask()
-    if not choice or choice == "Вернуться в главное меню":
+    if not choice or choice.startswith("⬅️"):
         return
 
-    if choice == "Ввести путь вручную":
+    if choice.startswith("📂"):
         config_path = questionary.path(
             "Укажите путь к YAML-конфигу (например, config.yaml):",
             completer=path_completer,
@@ -1106,7 +1106,7 @@ def validate_config_menu():
 def view_metrics_menu():
     """Меню просмотра метрик: базовый анализ CSV."""
     console.clear()
-    console.rule("[bold yellow]Просмотр метрик[/bold yellow]")
+    console.rule("[bold yellow]📊 Просмотр метрик[/bold yellow]")
 
     cwd = Path(".").resolve()
     csv_files = sorted(cwd.glob("*.csv"))
@@ -1116,14 +1116,14 @@ def view_metrics_menu():
         return
 
     choices = [f.name for f in csv_files]
-    choices.append("Вернуться в главное меню")
+    choices.append("⬅️ Вернуться в главное меню")
 
     choice = questionary.select(
         "Выберите CSV с метриками:",
         choices=choices,
         use_indicator=True,
     ).ask()
-    if not choice or choice == "Вернуться в главное меню":
+    if not choice or choice.startswith("⬅️"):
         return
 
     metrics_path = cwd / choice
@@ -1229,28 +1229,28 @@ def run_interactive():
         choice = questionary.select(
             "Выберите действие:",
             choices=[
-                "1. Запустить тест",
-                "2. Создать датасет",
-                "3. Конфиги и проверка",
-                "4. Просмотр метрик",
+                "🚀 Запустить тест",
+                "📦 Создать датасет",
+                "🧩 Конфиги и проверка",
+                "📊 Просмотр метрик",
                 questionary.Separator(),
-                "Выход"
+                "⬅️ Выход"
             ],
             use_indicator=True
         ).ask()
 
-        if choice is None or choice == "Выход":
+        if choice is None or choice.startswith("⬅️"):
             break
 
         console.clear()
 
-        if "1." in choice:
+        if choice.startswith("🚀"):
             run_test_menu()
-        elif "2." in choice:
+        elif choice.startswith("📦"):
             create_dataset_menu()
-        elif "3." in choice:
+        elif choice.startswith("🧩"):
             manage_configs_menu()
-        elif "4." in choice:
+        elif choice.startswith("📊"):
             view_metrics_menu()
 
 
