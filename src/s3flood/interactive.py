@@ -28,6 +28,16 @@ console = Console()
 path_completer = PathCompleter(expanduser=True, only_directories=True)
 
 
+def format_bytes_to_readable(bytes_val: Optional[int]) -> str:
+    """Конвертирует байты в читаемый формат (MB или GB)."""
+    if bytes_val is None:
+        return "не задано"
+    mb = bytes_val / (1024 * 1024)
+    if mb >= 1024:
+        return f"{mb / 1024:.1f} GB"
+    return f"{int(mb)} MB"
+
+
 class DotSpinner:
     """Простой спиннер из точек для индикации длительных операций."""
 
@@ -181,6 +191,16 @@ def run_test_menu():
     summary_table.add_row("unique_remote_names:", "yes" if settings.unique_remote_names else "no")
     if settings.profile == "mixed":
         summary_table.add_row("mixed_read_ratio:", str(settings.mixed_read_ratio))
+    # AWS CLI параметры
+    if settings.aws_cli_multipart_threshold is not None or settings.aws_cli_multipart_chunksize is not None or settings.aws_cli_max_concurrent_requests is not None:
+        summary_table.add_row("", "")  # Пустая строка для разделения
+        summary_table.add_row("AWS CLI параметры:", "")
+        if settings.aws_cli_multipart_threshold is not None:
+            summary_table.add_row("  multipart_threshold:", format_bytes_to_readable(settings.aws_cli_multipart_threshold))
+        if settings.aws_cli_multipart_chunksize is not None:
+            summary_table.add_row("  multipart_chunksize:", format_bytes_to_readable(settings.aws_cli_multipart_chunksize))
+        if settings.aws_cli_max_concurrent_requests is not None:
+            summary_table.add_row("  max_concurrent_requests:", str(settings.aws_cli_max_concurrent_requests))
     console.print(summary_table)
 
     # Возможность переопределить ключевые параметры перед запуском
@@ -245,6 +265,16 @@ def run_test_menu():
         final_table.add_row("unique_remote_names:", "yes" if settings.unique_remote_names else "no")
         if settings.profile == "mixed":
             final_table.add_row("mixed_read_ratio:", str(settings.mixed_read_ratio))
+        # AWS CLI параметры
+        if settings.aws_cli_multipart_threshold is not None or settings.aws_cli_multipart_chunksize is not None or settings.aws_cli_max_concurrent_requests is not None:
+            final_table.add_row("", "")  # Пустая строка для разделения
+            final_table.add_row("AWS CLI параметры:", "")
+            if settings.aws_cli_multipart_threshold is not None:
+                final_table.add_row("  multipart_threshold:", format_bytes_to_readable(settings.aws_cli_multipart_threshold))
+            if settings.aws_cli_multipart_chunksize is not None:
+                final_table.add_row("  multipart_chunksize:", format_bytes_to_readable(settings.aws_cli_multipart_chunksize))
+            if settings.aws_cli_max_concurrent_requests is not None:
+                final_table.add_row("  max_concurrent_requests:", str(settings.aws_cli_max_concurrent_requests))
         console.print(final_table)
 
     questionary.press_any_key_to_continue("Нажмите любую клавишу для запуска...").ask()
