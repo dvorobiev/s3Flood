@@ -678,6 +678,9 @@ def edit_config_menu():
     summary.add_row("infinite", str(data.get("infinite") or "False"))
     summary.add_row("mixed_read_ratio", str(data.get("mixed_read_ratio") or ""))
     summary.add_row("unique_remote_names", str(data.get("unique_remote_names") or "False"))
+    summary.add_row("pattern", str(data.get("pattern") or "sustained"))
+    summary.add_row("burst_duration_sec", str(data.get("burst_duration_sec") or ""))
+    summary.add_row("burst_intensity_multiplier", str(data.get("burst_intensity_multiplier") or ""))
     summary.add_row("order", str(data.get("order") or "sequential"))
     console.print(summary)
     console.print()  # пустая строка перед вопросами
@@ -759,6 +762,43 @@ def edit_config_menu():
         default=bool(data.get("unique_remote_names")),
     ).ask()
 
+    # Паттерн нагрузки
+    pattern_default = data.get("pattern") or "sustained"
+    pattern = questionary.select(
+        "Паттерн нагрузки (pattern):",
+        choices=["sustained", "bursty"],
+        default=pattern_default if pattern_default in ["sustained", "bursty"] else "sustained",
+    ).ask() or pattern_default
+
+    burst_duration_val = data.get("burst_duration_sec")
+    burst_intensity_val = data.get("burst_intensity_multiplier")
+
+    if pattern == "bursty":
+        # Длительность всплеска
+        burst_duration_str = questionary.text(
+            "burst_duration_sec (длительность всплеска, сек):",
+            default=str(burst_duration_val if burst_duration_val is not None else 60.0),
+            validate=lambda v: (
+                v.replace(".", "", 1).isdigit() and float(v) > 0.0
+            ) or "Введите число > 0",
+        ).ask()
+        burst_duration_sec = float(burst_duration_str) if burst_duration_str else (burst_duration_val or 60.0)
+
+        # Множитель интенсивности
+        burst_intensity_str = questionary.text(
+            "burst_intensity_multiplier (множитель интенсивности):",
+            default=str(burst_intensity_val if burst_intensity_val is not None else 5.0),
+            validate=lambda v: (
+                v.replace(".", "", 1).isdigit() and float(v) > 1.0
+            ) or "Введите число > 1.0",
+        ).ask()
+        burst_intensity_multiplier = (
+            float(burst_intensity_str) if burst_intensity_str else (burst_intensity_val or 5.0)
+        )
+    else:
+        burst_duration_sec = None
+        burst_intensity_multiplier = None
+
     # Обновляем структуру (профиль нагрузки из конфига игнорируем, он выбирается при запуске)
     updated = dict(data)
     updated.pop("profile", None)
@@ -768,6 +808,9 @@ def edit_config_menu():
     updated["infinite"] = bool(infinite)
     updated["mixed_read_ratio"] = mixed_ratio
     updated["unique_remote_names"] = bool(unique_remote_names)
+    updated["pattern"] = pattern
+    updated["burst_duration_sec"] = burst_duration_sec
+    updated["burst_intensity_multiplier"] = burst_intensity_multiplier
 
     if endpoint:
         updated["endpoint"] = endpoint
@@ -792,6 +835,9 @@ def edit_config_menu():
     table.add_row("infinite", str(updated.get("infinite")))
     table.add_row("mixed_read_ratio", str(updated.get("mixed_read_ratio")))
     table.add_row("unique_remote_names", str(updated.get("unique_remote_names")))
+    table.add_row("pattern", str(updated.get("pattern")))
+    table.add_row("burst_duration_sec", str(updated.get("burst_duration_sec")))
+    table.add_row("burst_intensity_multiplier", str(updated.get("burst_intensity_multiplier")))
     console.print(table)
 
     if not questionary.confirm("\nСохранить изменения в этом конфиге?", default=True).ask():
