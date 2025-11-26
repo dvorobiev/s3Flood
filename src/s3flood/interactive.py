@@ -1055,6 +1055,10 @@ def validate_config_menu():
         ],
     ).ask()
 
+    if action == "Вернуться в главное меню":
+        # Просто выходим без лишнего подтверждения
+        return
+
     if action == "Удалить ВСЕ объекты из бакета":
         console.print(
             f"\n[bold red]ВНИМАНИЕ: будет выполнено полное удаление всех объектов из бакета "
@@ -1095,7 +1099,8 @@ def validate_config_menu():
         except Exception as exc:
             console.print(f"[bold red]Ошибка при выполнении удаления: {exc}[/bold red]")
 
-    questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        # После операции удаления даём пользователю прочитать вывод
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
 
 
 def view_metrics_menu():
