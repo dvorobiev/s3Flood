@@ -486,17 +486,19 @@ def _get_aws_env(
     env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
     # Формируем конфигурацию AWS CLI (переопределяет настройки из ~/.aws/config)
     # Переменные окружения имеют приоритет над конфигом
+    # Устанавливаем переменную только если хотя бы один параметр задан
     transfer_config = {}
     if multipart_threshold is not None:
         transfer_config["multipart_threshold"] = multipart_threshold
-    else:
-        # Дефолтное значение: 5GB (чтобы избежать multipart для большинства файлов)
-        transfer_config["multipart_threshold"] = 5368709120
     if multipart_chunksize is not None:
         transfer_config["multipart_chunksize"] = multipart_chunksize
     if max_concurrent_requests is not None:
         transfer_config["max_concurrent_requests"] = max_concurrent_requests
-    env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_config)
+    
+    # Устанавливаем переменную окружения только если есть хотя бы один параметр
+    # Если все параметры None, AWS CLI будет использовать настройки из ~/.aws/config
+    if transfer_config:
+        env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_config)
     if aws_profile:
         env["AWS_PROFILE"] = aws_profile
         env.pop("AWS_ACCESS_KEY_ID", None)
