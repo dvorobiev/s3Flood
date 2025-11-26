@@ -796,8 +796,9 @@ def edit_config_menu():
             float(burst_intensity_str) if burst_intensity_str else (burst_intensity_val or 5.0)
         )
     else:
-        burst_duration_sec = None
-        burst_intensity_multiplier = None
+        # Для sustained не трогаем существующие значения (если были заданы в конфиге)
+        burst_duration_sec = burst_duration_val
+        burst_intensity_multiplier = burst_intensity_val
 
     # Обновляем структуру (профиль нагрузки из конфига игнорируем, он выбирается при запуске)
     updated = dict(data)
