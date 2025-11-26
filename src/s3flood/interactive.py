@@ -939,8 +939,10 @@ def validate_config_menu():
     info_table.add_row("Bucket:", settings.bucket)
     info_table.add_row("Endpoint:", primary_endpoint or "<не задан>")
     info_table.add_row("Threads:", str(settings.threads))
+    info_table.add_row("Data_dir:", str(settings.data_dir))
     console.print(info_table)
 
+    # Проверка конфигурации endpoint'а
     if not primary_endpoint:
         console.print("[bold red]Endpoint не настроен — подключение к S3 невозможно.[/bold red]")
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
@@ -975,6 +977,31 @@ def validate_config_menu():
             "Нажмите любую клавишу для возврата в меню..."
         ).ask()
         return
+
+    # Проверка локального датасета
+    console.print("\n[bold]Проверка датасета (data_dir)...[/bold]")
+    data_root = Path(settings.data_dir).expanduser()
+    if not data_root.exists():
+        console.print(f"[bold red]Каталог датасета не найден:[/bold red] [cyan]{data_root}[/cyan]")
+    else:
+        # Подсчёт файлов и общего объёма
+        total_files = 0
+        total_bytes = 0
+        try:
+            for p in data_root.rglob("*"):
+                if p.is_file():
+                    total_files += 1
+                    try:
+                        total_bytes += p.stat().st_size
+                    except OSError:
+                        continue
+            size_gb = total_bytes / 1024 / 1024 / 1024 if total_bytes > 0 else 0.0
+            console.print(
+                f"[green]Каталог датасета найден:[/green] [cyan]{data_root}[/cyan] "
+                f"(файлов: {total_files}, объём: {size_gb:.2f} GB)"
+            )
+        except OSError as exc:
+            console.print(f"[bold red]Ошибка при обходе датасета: {exc}[/bold red]")
 
     console.print("\n[bold]Пробуем получить список объектов из бакета...[/bold]")
     try:
