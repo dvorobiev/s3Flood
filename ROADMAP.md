@@ -1,19 +1,65 @@
 ## Roadmap
 
+### Реализованные GitHub Actions
+
+В проекте уже настроены следующие автоматизированные workflow:
+
+1. **CI** (`.github/workflows/ci.yml`):
+   - Запускается на каждый push в `main` и на pull requests
+   - Тестирует на Linux (Ubuntu latest)
+   - Запускает MinIO в Docker, создаёт датасет, выполняет smoke-тест (write профиль)
+   - Загружает артефакты с отчётами
+
+2. **Release** (`.github/workflows/release.yml`):
+   - Запускается при создании тега `v*`
+   - Собирает wheel и sdist через `python -m build`
+   - Автоматически извлекает release notes из CHANGELOG.md
+   - Создаёт GitHub Release с артефактами
+
+3. **Windows Bundle** (`.github/workflows/windows-bundle.yml`):
+   - Запускается при создании тега или вручную через `workflow_dispatch`
+   - Собирает `s3flood.exe` через PyInstaller на Windows runner
+   - Создаёт `s3flood-windows.zip` с exe, README и config.sample.yaml
+   - Автоматически прикрепляет к GitHub Release
+
+4. **Windows Portable** (`.github/workflows/windows-portable.yml`):
+   - Запускается при создании тега или вручную через `workflow_dispatch`
+   - Собирает portable дистрибутив с Python embedded (3.11.9)
+   - Включает все зависимости, создаёт batch-скрипты для запуска
+   - Создаёт `s3flood-windows-portable.zip` и прикрепляет к релизу
+
 ### Высокий приоритет
-- [ ] **Автотесты: pytest + smoke-сценарий против MinIO в CI (Linux и Windows).**
+- [x] **Автотесты: pytest + smoke-сценарий против MinIO в CI (Linux и Windows).** — частично реализовано
   
   **Что это:** Автоматизированные тесты для проверки работоспособности s3flood перед каждым коммитом/релизом.
   
-  **Как планируем реализовать:**
-  - Настроить GitHub Actions workflow для Linux и Windows runners
-  - Запускать MinIO в Docker контейнере в CI
-  - Написать pytest-тесты:
-    - Smoke-тест: создать минимальный датасет (например, 10MB), запустить профиль `write` с 2 потоками, проверить что файлы загрузились в бакет
-    - Проверка метрик: убедиться что CSV и JSON отчёты генерируются корректно
-    - Проверка профилей: базовый прогон `read` и `mixed` профилей
-  - Интеграция в CI pipeline: тесты запускаются автоматически на каждый PR и push в main
-  - Цель: предотвратить регрессии и обеспечить стабильность базовой функциональности
+  **Что уже реализовано:**
+  - ✅ **CI workflow** (`.github/workflows/ci.yml`): автоматический smoke-тест на Linux
+    - Запускает MinIO в Docker контейнере
+    - Создаёт минимальный датасет (5 small, 3 medium, 1 large файл)
+    - Запускает профиль `write` с 2 потоками против MinIO
+    - Загружает артефакты (out.json, out.csv) для анализа
+    - Триггерится на push в `main` и на pull requests
+  - ✅ **Release workflow** (`.github/workflows/release.yml`): автоматическая сборка и публикация релизов
+    - Собирает wheel и sdist при создании тега `v*`
+    - Автоматически извлекает release notes из CHANGELOG.md
+    - Создаёт GitHub Release с артефактами
+  - ✅ **Windows bundle workflow** (`.github/workflows/windows-bundle.yml`): сборка Windows exe
+    - Собирает `s3flood.exe` через PyInstaller
+    - Создаёт ZIP-архив с exe, README и config.sample.yaml
+    - Автоматически прикрепляет к релизу при создании тега
+  - ✅ **Windows portable workflow** (`.github/workflows/windows-portable.yml`): portable дистрибутив
+    - Собирает portable версию с Python embedded (3.11.9)
+    - Включает все зависимости и s3flood
+    - Создаёт ZIP с batch-скриптами для запуска
+    - Автоматически прикрепляет к релизу при создании тега
+  
+  **Что осталось сделать:**
+  - [ ] Добавить Windows runner в CI workflow для тестирования на Windows
+  - [ ] Написать pytest-тесты (сейчас используется интеграционный smoke-тест через CLI)
+  - [ ] Расширить тестовое покрытие: добавить тесты для профилей `read` и `mixed`
+  - [ ] Проверка метрик: автоматическая валидация структуры CSV и JSON отчётов
+  - [ ] Интеграция с pytest для более структурированного тестирования
 - [x] Профили нагрузки: `read-heavy`, `write-heavy`, `mixed` (ранее `mixed-70-30`), паттерны `sustained|bursty` — реализовано.
 - [x] Тест чтения из бакета (поток в `/dev/null`, без нагрузки на диск) — реализовано в профиле `write-heavy`.
 - [x] Смешанные режимы (одновременный upload/download, общая очередь) — реализовано в профиле `mixed`.
@@ -70,7 +116,16 @@
 - [ ] Настройки параметров AWS CLI: размер чанка (multipart chunk size), multipart threshold, max concurrent requests и другие параметры производительности.
 
 ### Низкий приоритет / дальше
-- [ ] PyInstaller/standalone сборки для Linux/Windows.
+- [x] **PyInstaller/standalone сборки для Linux/Windows.** — реализовано для Windows
+  
+  **Что реализовано:**
+  - ✅ **Windows exe через PyInstaller** (workflow `windows-bundle.yml`): автоматическая сборка `s3flood.exe` с включёнными зависимостями
+  - ✅ **Windows portable дистрибутив** (workflow `windows-portable.yml`): сборка portable версии с Python embedded, не требующей установки Python на целевой машине
+  - ✅ Автоматическое прикрепление к GitHub Release при создании тега
+  
+  **Что осталось:**
+  - [ ] Standalone сборки для Linux (аналогично Windows portable)
+  - [ ] Локальные скрипты сборки для разработчиков (уже есть `build-windows-portable.sh`)
 - [ ] **Расширенные распределения наборов данных (Pareto/Zipf).**
   
   **Что это:** Генерация датасетов с реалистичными распределениями размеров файлов, имитирующими реальные паттерны использования (большинство файлов маленькие, но есть несколько очень больших).
