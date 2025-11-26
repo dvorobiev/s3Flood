@@ -1,6 +1,6 @@
 # Пример конфига запуска s3flood. Скопируйте в config.local.yaml и подставьте свои значения.
 run:
-  profile: write
+  profile: write  # профиль по умолчанию; при запуске можно переопределить через CLI или меню (write/read/mixed)
   client: awscli
   # Один endpoint...
   endpoint: "http://127.0.0.1:9000"
@@ -22,7 +22,7 @@ run:
   metrics: "out.csv"
   # infinite: false  # Бесконечный режим: после завершения всех файлов начинать заново
   # Параметры для mixed профиля
-  # mixed_read_ratio: 0.7  # Доля операций чтения (0.0-1.0), по умолчанию 0.7 для mixed-70-30
+  # mixed_read_ratio: 0.7  # Доля операций чтения (0.0-1.0), по умолчанию 0.7 для mixed
   # Паттерны нагрузки
   # pattern: sustained  # sustained | bursty
   # burst_duration_sec: 10.0  # Длительность всплеска в секундах для bursty

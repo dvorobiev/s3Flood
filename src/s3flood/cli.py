@@ -86,7 +86,7 @@ def main():
 
   # Запуск mixed профиля с bursty паттерном
   s3flood run --config config.yaml \\
-    --profile mixed-70-30 \\
+    --profile mixed \\
     --pattern bursty \\
     --threads 16 \\
     --infinite
@@ -103,7 +103,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     runp.add_argument("--config", help="YAML-файл с параметрами запуска (endpoint, bucket, креденшлы). Все параметры из конфига можно переопределить через CLI")
-    runp.add_argument("--profile", choices=["write","read","mixed-70-30"], default=None, help="Профиль нагрузки: write (только запись), read (только чтение из бакета), mixed-70-30 (смешанные операции)")
+    runp.add_argument("--profile", choices=["write","read","mixed"], default=None, help="Профиль нагрузки: write (только запись), read (только чтение из бакета), mixed (смешанные операции)")
     runp.add_argument("--client", choices=["awscli","rclone","s3cmd"], default=None, help="S3 клиент для использования (по умолчанию: awscli)")
     runp.add_argument("--endpoint", default=None, help="URL S3 endpoint (например, http://localhost:9000 для MinIO)")
     runp.add_argument("--endpoints", nargs="+", default=None, help="Список endpoint'ов для кластерного режима (например: http://node1:9000 http://node2:9000)")
@@ -117,7 +117,7 @@ def main():
     runp.add_argument("--report", default=None, help="Путь к JSON файлу с итоговым отчётом (по умолчанию: report.json)")
     runp.add_argument("--metrics", default=None, help="Путь к CSV файлу с детальными метриками по каждой операции (по умолчанию: metrics.csv)")
     runp.add_argument("--data-dir", dest="data_dir", default=None, help="Путь к корню датасета (сканируется рекурсивно, по умолчанию: ./data)")
-    runp.add_argument("--mixed-read-ratio", type=float, dest="mixed_read_ratio", default=None, help="Доля операций чтения для mixed профиля (0.0-1.0, по умолчанию для mixed-70-30: 0.7)")
+    runp.add_argument("--mixed-read-ratio", type=float, dest="mixed_read_ratio", default=None, help="Доля операций чтения для mixed профиля (0.0-1.0, по умолчанию для mixed: 0.7)")
     runp.add_argument("--pattern", choices=["sustained","bursty"], default=None, help="Паттерн нагрузки: sustained (ровная постоянная) или bursty (чередование всплесков и пауз)")
     runp.add_argument("--burst-duration-sec", type=float, dest="burst_duration_sec", default=None, help="Длительность всплеска в секундах для bursty паттерна (по умолчанию: 10.0)")
     runp.add_argument("--burst-intensity-multiplier", type=float, dest="burst_intensity_multiplier", default=None, help="Множитель интенсивности во время всплеска для bursty паттерна (по умолчанию: 10.0)")

@@ -155,7 +155,10 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
 
     # Параметры для mixed профиля (по умолчанию 70% чтения, 30% записи)
     mixed_read_ratio = pick("mixed_read_ratio")
-    if profile == "mixed-70-30" and mixed_read_ratio is None:
+    # Поддерживаем старое имя профиля mixed-70-30 для обратной совместимости
+    if profile == "mixed-70-30":
+        profile = "mixed"
+    if profile == "mixed" and mixed_read_ratio is None:
         mixed_read_ratio = 0.7
 
     # Паттерны нагрузки

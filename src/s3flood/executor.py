@@ -642,6 +642,9 @@ def gather_files(root: Path):
 
 def run_profile(args):
     profile = getattr(args, "profile", "write")
+    # Поддерживаем старое имя профиля mixed-70-30 (обратная совместимость)
+    if profile == "mixed-70-30":
+        profile = "mixed"
     order = getattr(args, "order", "sequential")
     
     jobs: list[Job] = []
@@ -788,7 +791,7 @@ def run_profile(args):
         # Для write профиля добавляем задачи на запись
         for job in jobs:
             q.put(("upload", job))
-    elif profile == "mixed-70-30":
+    elif profile == "mixed":
         # Для mixed профиля сначала загружаем данные
         for job in jobs:
             q.put(("upload", job))
@@ -827,7 +830,7 @@ def run_profile(args):
         nonlocal active_uploads, active_downloads, files_in_current_cycle, extra_thread_ids
         # Для bursty режима в mixed профиле: дополнительные потоки работают только во время всплеска
         current_thread_id = threading.get_ident()
-        is_extra_thread = current_thread_id in extra_thread_ids if pattern == "bursty" and profile == "mixed-70-30" else False
+        is_extra_thread = current_thread_id in extra_thread_ids if pattern == "bursty" and profile == "mixed" else False
         
         while not stop.is_set():
             # Для дополнительных потоков в bursty режиме: работаем только во время всплеска
@@ -843,7 +846,7 @@ def run_profile(args):
             except queue.Empty:
                 # Для write и read профилей: если очередь пуста, завершаем worker
                 # Для mixed профиля: если upload фаза завершена и очередь пуста, завершаем worker
-                if profile == "mixed-70-30":
+                if profile == "mixed":
                     if upload_phase_done.is_set() and q.empty():
                         break
                 else:
@@ -989,7 +992,7 @@ def run_profile(args):
     threads = []
     threads_lock = threading.Lock()
     max_threads = args.threads
-    if pattern == "bursty" and profile == "mixed-70-30":
+    if pattern == "bursty" and profile == "mixed":
         # Для bursty режима в mixed профиле создаем максимальное количество потоков
         max_threads = int(args.threads * burst_intensity_multiplier)
     
@@ -1001,7 +1004,7 @@ def run_profile(args):
         threads.append(t)
     
     # Для bursty режима в mixed профиле создаем дополнительные потоки
-    if pattern == "bursty" and profile == "mixed-70-30":
+    if pattern == "bursty" and profile == "mixed":
         for _ in range(max_threads - base_threads):
             t = threading.Thread(target=worker, daemon=True)
             t.start()
@@ -1100,7 +1103,7 @@ def run_profile(args):
                         operations_pending = q.qsize()
                 
                 if operations_pending == 0 and operations_active == 0:
-                    if profile == "mixed-70-30":
+                    if profile == "mixed":
                         start_mixed_phase()
                     elif getattr(args, "infinite", False):
                         # Бесконечный режим: после завершения всех файлов начинаем новый цикл
@@ -1132,7 +1135,7 @@ def run_profile(args):
                                 last_cycle_restart = now
             
             # Для mixed профиля: добавляем новые задачи в смешанном режиме
-            if mixed_phase_started and profile == "mixed-70-30":
+            if mixed_phase_started and profile == "mixed":
                 with uploaded_objects_lock:
                     if uploaded_objects and q.qsize() < (queue_limit or 1000):
                         # Добавляем новые задачи в зависимости от паттерна
