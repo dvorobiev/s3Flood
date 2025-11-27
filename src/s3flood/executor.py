@@ -525,35 +525,20 @@ def aws_cp_upload(
     multipart_chunksize: int | None = None,
     max_concurrent_requests: int | None = None,
 ):
+    """
+    Загружает файл в S3 используя aws s3 cp.
+    AWS CLI автоматически определяет, использовать ли multipart upload на основе
+    multipart_threshold из переменной окружения AWS_CLI_FILE_TRANSFER_CONFIG.
+    """
     env = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
-    try:
-        size_bytes = local.stat().st_size
-    except OSError:
-        size_bytes = 0
-    
-    # Определяем порог для multipart upload
-    # Если multipart_threshold задан, используем его, иначе дефолт 5GB
-    if multipart_threshold is not None:
-        threshold = multipart_threshold
-    else:
-        # Дефолт AWS CLI: 5GB
-        threshold = 5 * 1024 * 1024 * 1024
-    
-    # Для файлов >= threshold используем aws s3 cp (поддерживает multipart upload)
-    # Для файлов < threshold используем aws s3api put-object (одиночный PUT, быстрее для маленьких файлов)
-    if size_bytes and size_bytes >= threshold:
-        # Используем aws s3 cp для multipart upload
-        url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
-        cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
-        return subprocess.run(cmd, capture_output=True, text=True, env=env)
-    else:
-        # Используем aws s3api put-object для одиночного PUT (быстрее для маленьких файлов)
-        bucket_name = bucket.replace("s3://", "").split("/")[0]
-        cmd = ["aws", "s3api", "put-object", "--bucket", bucket_name, "--key", key, "--body", str(local), "--endpoint-url", endpoint]
-        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # Всегда используем aws s3 cp - он автоматически выберет multipart или обычный PUT
+    # на основе multipart_threshold из переменных окружения
+    url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
+    cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
 def aws_list_objects(
