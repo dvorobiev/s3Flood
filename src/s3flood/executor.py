@@ -28,6 +28,13 @@ ANSI_MAGENTA = "\x1b[35m" if USE_COLORS else ""
 ANSI_CYAN = "\x1b[36m" if USE_COLORS else ""
 
 ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
+CONFIG_HOME = Path.home()
+CUSTOM_AWS_PROFILE = "s3flood-temp"
+CUSTOM_AWS_CONFIG_PATH = Path(
+    os.environ.get("S3FLOOD_CUSTOM_AWS_CONFIG") or (CONFIG_HOME / ".aws" / "s3flood-config")
+).expanduser()
+_custom_config_signature: tuple | None = None
+_custom_config_lock = threading.Lock()
 
 WRITE_ICON = "↑"
 READ_ICON = "↓"
@@ -113,6 +120,50 @@ def make_remote_key(filename: str, unique: bool) -> str:
     if ext:
         return f"{stem}.{suffix}{ext}"
     return f"{stem}.{suffix}"
+
+
+def _format_cli_size(value: int) -> str:
+    """Преобразует размер в строку формата AWS CLI (MB/GB)."""
+    gb = 1024 * 1024 * 1024
+    mb = 1024 * 1024
+    if value % gb == 0:
+        return f"{value // gb}GB"
+    if value % mb == 0:
+        return f"{value // mb}MB"
+    return f"{value}B"
+
+
+def _ensure_custom_aws_config(source_profile: str | None, s3_settings: dict[str, str]) -> Path:
+    """
+    Создаёт отдельный AWS config с нужными параметрами S3 и (опционально) source_profile.
+    """
+    global _custom_config_signature
+    region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
+    signature = (tuple(sorted(s3_settings.items())), source_profile, region)
+    with _custom_config_lock:
+        if _custom_config_signature == signature and CUSTOM_AWS_CONFIG_PATH.exists():
+            return CUSTOM_AWS_CONFIG_PATH
+
+        block_lines = [f"[profile {CUSTOM_AWS_PROFILE}]"]
+        if source_profile:
+            block_lines.append(f"source_profile = {source_profile}")
+        if region:
+            block_lines.append(f"region = {region}")
+        if s3_settings:
+            block_lines.append("s3 =")
+            for key, value in s3_settings.items():
+                block_lines.append(f"    {key} = {value}")
+
+        config_content = "\n".join(block_lines).strip() + "\n"
+        CUSTOM_AWS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CUSTOM_AWS_CONFIG_PATH, "w", encoding="utf-8") as cfg:
+            cfg.write(config_content)
+        try:
+            os.chmod(CUSTOM_AWS_CONFIG_PATH, 0o600)
+        except OSError:
+            pass
+        _custom_config_signature = signature
+        return CUSTOM_AWS_CONFIG_PATH
 
 
 class Metrics:
@@ -480,51 +531,38 @@ def _get_aws_env(
     max_concurrent_requests: int | None = None,
 ) -> tuple[dict, str | None]:
     """
-    Возвращает (env, profile_name).
-    profile_name - имя AWS CLI профиля с настроенными параметрами multipart (или None).
+    Возвращает (env, profile_name) для запуска AWS CLI.
+    profile_name — имя профиля, который нужно передать в aws ... --profile.
     """
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
     # Отключаем автоматические checksums для совместимости с S3-совместимыми бекендами
     # (начиная с boto3 1.36.0 checksums включены по умолчанию, что может вызывать BadDigest)
     env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
-    
-    def _size_to_cli(value: int) -> str:
-        gb = 1024 * 1024 * 1024
-        mb = 1024 * 1024
-        if value % gb == 0:
-            return f"{value // gb}GB"
-        if value % mb == 0:
-            return f"{value // mb}MB"
-        return f"{value}B"
 
-    transfer_cfg: dict[str, object] = {}
+    s3_settings: dict[str, str] = {}
     if multipart_threshold is not None:
-        transfer_cfg["multipart_threshold"] = _size_to_cli(multipart_threshold)
+        s3_settings["multipart_threshold"] = _format_cli_size(multipart_threshold)
     if multipart_chunksize is not None:
-        transfer_cfg["multipart_chunksize"] = _size_to_cli(multipart_chunksize)
+        s3_settings["multipart_chunksize"] = _format_cli_size(multipart_chunksize)
     if max_concurrent_requests is not None:
-        transfer_cfg["max_concurrent_requests"] = max_concurrent_requests
+        s3_settings["max_concurrent_requests"] = str(max_concurrent_requests)
 
-    if transfer_cfg:
-        env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_cfg)
-    else:
-        env.pop("AWS_CLI_FILE_TRANSFER_CONFIG", None)
+    custom_path = _ensure_custom_aws_config(aws_profile, s3_settings)
+    env["AWS_CONFIG_FILE"] = str(custom_path)
+    profile_to_use: str | None = CUSTOM_AWS_PROFILE
 
-    profile_to_use = None
-    if aws_profile:
-        profile_to_use = aws_profile
-        env["AWS_PROFILE"] = aws_profile
-        env.pop("AWS_ACCESS_KEY_ID", None)
-        env.pop("AWS_SECRET_ACCESS_KEY", None)
-    elif access_key and secret_key:
+    if access_key and secret_key:
         env["AWS_ACCESS_KEY_ID"] = access_key
         env["AWS_SECRET_ACCESS_KEY"] = secret_key
-        env.pop("AWS_PROFILE", None)
     else:
-        env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
+
+    env["AWS_PROFILE"] = profile_to_use
+
+    # Больше не используем AWS_CLI_FILE_TRANSFER_CONFIG
+    env.pop("AWS_CLI_FILE_TRANSFER_CONFIG", None)
 
     return env, profile_to_use
 

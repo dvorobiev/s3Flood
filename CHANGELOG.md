@@ -8,6 +8,7 @@
   - Убран лишний prompt "Нажмите любую клавишу для запуска..." если параметры не менялись
   - Исправлен спиннер при удалении объектов - убрано дублирующее сообщение
 - **Вывод AWS CLI параметров**: в сводке параметров перед запуском теста теперь отображаются настройки multipart (threshold, chunksize, max_concurrent_requests) в читаемом формате (MB/GB).
+- **Отдельный AWS config**: s3flood всегда создаёт временный профиль `s3flood-temp` в `~/.aws/s3flood-config` и не изменяет пользовательский `~/.aws/config`. Все параметры multipart/max_concurrent_requests берутся из конфига s3flood и действуют на всём протяжении теста.
 
 ### 0.9.9-beta — Настройки AWS CLI параметров
 - **Настраиваемые параметры AWS CLI**: добавлена возможность настройки `aws_cli_multipart_threshold`, `aws_cli_multipart_chunksize` и `aws_cli_max_concurrent_requests` через конфиг.
