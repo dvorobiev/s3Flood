@@ -20,6 +20,7 @@ import csv
 import statistics
 from prompt_toolkit.completion import PathCompleter
 from typing import Optional, Union
+from urllib.parse import urlparse, urlunparse
 
 from .config import load_run_config, RunConfigModel, resolve_run_settings
 from .dataset import plan_and_generate
@@ -717,11 +718,38 @@ def edit_config_menu():
 
     current = cfg_model.model_dump()
 
+    def _clone_value(val):
+        if isinstance(val, list):
+            return list(val)
+        return val
+
+    initial_state = {k: _clone_value(v) for k, v in current.items()}
+
+    def normalize_endpoint_url(value: str) -> str:
+        if not value:
+            return value
+        raw = value.strip()
+        if not raw:
+            return raw
+        if not raw.startswith(("http://", "https://")):
+            raw = f"http://{raw}"
+        parsed = urlparse(raw)
+        netloc = parsed.netloc or parsed.path
+        path = parsed.path if parsed.netloc else ""
+        if ":" not in netloc:
+            netloc = f"{netloc}:9080"
+        parsed = parsed._replace(
+            scheme=parsed.scheme or "http",
+            netloc=netloc,
+            path=path,
+        )
+        return urlunparse(parsed)
+
     def ensure_list(value):
         if isinstance(value, list):
-            return value
+            return [normalize_endpoint_url(v) for v in value if v]
         if isinstance(value, str) and value.strip():
-            return [v.strip() for v in value.split(',') if v.strip()]
+            return [normalize_endpoint_url(v.strip()) for v in value.split(',') if v.strip()]
         return []
 
     current['endpoints'] = ensure_list(current.get('endpoints'))
@@ -734,6 +762,13 @@ def edit_config_menu():
         if value in (None, ''):
             return '—'
         return str(value)
+
+    def has_changed(key: str) -> bool:
+        init = initial_state.get(key)
+        curr = current.get(key)
+        if isinstance(init, list) or isinstance(curr, list):
+            return list(init or []) != list(curr or [])
+        return init != curr
 
     def edit_connection():
         mode = questionary.select(
@@ -748,7 +783,7 @@ def edit_config_menu():
                 "Endpoints (через запятую):",
                 default=','.join(current.get('endpoints') or []) or 'http://localhost:9000',
             ).ask() or ','.join(current.get('endpoints') or [])
-            endpoints = [e.strip() for e in endpoints_str.split(',') if e.strip()]
+            endpoints = [normalize_endpoint_url(e.strip()) for e in endpoints_str.split(',') if e.strip()]
             endpoint_mode = questionary.select(
                 "Стратегия выбора endpoint:",
                 choices=["round-robin", "random"],
@@ -762,7 +797,7 @@ def edit_config_menu():
                 "Endpoint (например, http://localhost:9000):",
                 default=current.get('endpoint') or 'http://localhost:9000',
             ).ask() or current.get('endpoint') or 'http://localhost:9000'
-            current['endpoint'] = endpoint
+            current['endpoint'] = normalize_endpoint_url(endpoint)
             current['endpoints'] = []
             current['endpoint_mode'] = None
 
@@ -811,20 +846,17 @@ def edit_config_menu():
         elif answer.strip() != '':
             current[key] = float(answer)
 
-    def edit_bool(key, prompt):
-        answer = questionary.confirm(prompt, default=bool(current.get(key))).ask()
-        if answer is not None:
-            current[key] = bool(answer)
+    def toggle_bool(key):
+        current[key] = not bool(current.get(key))
 
-    def edit_choice(key, prompt, choices):
-        default = current.get(key)
-        answer = questionary.select(
-            prompt,
-            choices=choices,
-            default=default if default in choices else choices[0],
-        ).ask()
-        if answer is not None:
-            current[key] = answer
+    def cycle_choice(key, choices):
+        if not choices:
+            return
+        value = current.get(key)
+        if value not in choices:
+            value = choices[0]
+        idx = choices.index(value)
+        current[key] = choices[(idx + 1) % len(choices)]
 
     def edit_mixed_ratio():
         default = current.get('mixed_read_ratio')
@@ -875,7 +907,7 @@ def edit_config_menu():
         ).ask()
         if answer is None:
             return
-        endpoints = [e.strip() for e in (answer or '').split(',') if e.strip()]
+        endpoints = [normalize_endpoint_url(e.strip()) for e in (answer or '').split(',') if e.strip()]
         current['endpoints'] = endpoints
         if endpoints:
             current['endpoint'] = None
@@ -883,13 +915,16 @@ def edit_config_menu():
                 current['endpoint_mode'] = 'round-robin'
 
     def edit_endpoint_mode():
-        answer = questionary.select(
-            "Стратегия выбора endpoint:",
-            choices=["round-robin", "random"],
-            default=current.get('endpoint_mode') if current.get('endpoint_mode') in ['round-robin', 'random'] else 'round-robin',
-        ).ask()
-        if answer is not None:
-            current['endpoint_mode'] = answer
+        if not current.get('endpoints'):
+            console.print("[yellow]Режим подключения доступен только для кластерных endpoints.[/yellow]")
+            questionary.press_any_key_to_continue("Нажмите любую клавишу, чтобы вернуться к списку...").ask()
+            return
+        options = ["round-robin", "random"]
+        current_mode = current.get('endpoint_mode')
+        if current_mode not in options:
+            current_mode = options[0]
+        next_mode = options[(options.index(current_mode) + 1) % len(options)]
+        current['endpoint_mode'] = next_mode
 
     def edit_endpoint_text():
         answer = questionary.text(
@@ -899,10 +934,18 @@ def edit_config_menu():
         if answer is None:
             return
         endpoint = answer.strip()
-        current['endpoint'] = endpoint or None
+        current['endpoint'] = normalize_endpoint_url(endpoint) if endpoint else None
         if endpoint:
             current['endpoints'] = []
             current['endpoint_mode'] = None
+
+    def toggle_pattern():
+        cycle_choice("pattern", ["sustained", "bursty"])
+        if current.get("pattern") == "bursty":
+            if current.get("burst_duration_sec") is None:
+                current["burst_duration_sec"] = 60.0
+            if current.get("burst_intensity_multiplier") is None:
+                current["burst_intensity_multiplier"] = 5.0
 
     field_handlers = {
         "connection": edit_connection,
@@ -914,13 +957,13 @@ def edit_config_menu():
         "data_dir": lambda: edit_text("data_dir", "Каталог датасета (data_dir):", default_value=current.get('data_dir') or './loadset/data'),
         "report": lambda: edit_text("report", "Имя файла отчёта (JSON):", default_value=current.get('report') or 'report.json'),
         "metrics": lambda: edit_text("metrics", "Имя файла метрик (CSV):", default_value=current.get('metrics') or 'metrics.csv'),
-        "infinite": lambda: edit_bool("infinite", "Бесконечный режим (infinite):"),
+        "infinite": lambda: toggle_bool("infinite"),
         "mixed_read_ratio": edit_mixed_ratio,
-        "unique_remote_names": lambda: edit_bool("unique_remote_names", "unique_remote_names (уникальные имена объектов):"),
-        "pattern": lambda: edit_choice("pattern", "Паттерн нагрузки:", ["sustained", "bursty"]),
+        "unique_remote_names": lambda: toggle_bool("unique_remote_names"),
+        "pattern": toggle_pattern,
         "burst_duration_sec": lambda: edit_float("burst_duration_sec", "burst_duration_sec (сек):", allow_empty=True, min_value=0.0),
         "burst_intensity_multiplier": lambda: edit_float("burst_intensity_multiplier", "burst_intensity_multiplier:", allow_empty=True, min_value=1.0),
-        "order": lambda: edit_choice("order", "Порядок обработки файлов (order):", ["sequential", "random"]),
+        "order": lambda: cycle_choice("order", ["sequential", "random"]),
         "aws_cli_multipart_threshold": lambda: edit_size_field("aws_cli_multipart_threshold", "aws_cli_multipart_threshold (MB или '5GB'):"),
         "aws_cli_multipart_chunksize": lambda: edit_size_field("aws_cli_multipart_chunksize", "aws_cli_multipart_chunksize (MB или '8MB'):"),
         "aws_cli_max_concurrent_requests": lambda: edit_int("aws_cli_max_concurrent_requests", "aws_cli_max_concurrent_requests:", default=current.get('aws_cli_max_concurrent_requests') or 10, min_value=1),
@@ -951,12 +994,12 @@ def edit_config_menu():
     while True:
         console.clear()
         console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
-        console.print(f"[bold]Файл:[/bold] [cyan]{cfg_path}[/cyan]\n")
+        console.print(f"[bold]Файл:[/bold] [cyan]{cfg_path}[/cyan]")
+        console.print("[dim]Enter — изменить значение. Для переключаемых полей (Yes/No, порядок) переключение происходит сразу.[/dim]\n")
 
-        summary = Table(show_header=False, box=None)
-        summary.add_column(style="cyan")
-        summary.add_column(style="white")
         row_texts = {}
+        row_changed = {}
+
         for key, label in field_order:
             if key == 'connection':
                 if current.get('endpoint'):
@@ -965,14 +1008,25 @@ def edit_config_menu():
                     value = f"Кластер ({len(current['endpoints'])} endpoint)"
                 else:
                     value = '—'
+                changed = has_changed('endpoint') or has_changed('endpoints') or has_changed('endpoint_mode')
             else:
                 value = format_value(current.get(key))
-            summary.add_row(label, value)
+                changed = has_changed(key)
             row_texts[key] = value
-        console.print(summary)
+            row_changed[key] = changed
+
+        def render_choice_title(key: str, label: str) -> str:
+            value = row_texts.get(key, "—")
+            if row_changed.get(key):
+                marker = style("*", ANSI_BOLD, ANSI_YELLOW)
+                value_rendered = style(value, ANSI_BOLD, ANSI_YELLOW)
+            else:
+                marker = " "
+                value_rendered = style(value, ANSI_CYAN)
+            return f"{marker} {label:<32} {value_rendered}"
 
         choices = [
-            questionary.Choice(title=f"{label}: {row_texts[key]}", value=key)
+            questionary.Choice(title=render_choice_title(key, label), value=key)
             for key, label in field_order
         ]
         choices.append(questionary.Choice(title="Сохранить изменения", value="save"))
