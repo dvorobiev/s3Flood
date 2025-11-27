@@ -115,7 +115,8 @@ def build_default_config() -> Dict[str, Any]:
     return {
         "client": "awscli",
         "bucket": "your-bucket-name",
-        "endpoint": "http://127.0.0.1:9000",
+        # По умолчанию ориентируемся на MinIO/S3 endpoint на 9080 порту
+        "endpoint": "http://127.0.0.1:9080",
         "endpoints": [],
         "endpoint_mode": "round-robin",
         "access_key": None,

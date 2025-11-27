@@ -3,11 +3,11 @@ run:
   profile: write  # профиль по умолчанию; при запуске можно переопределить через CLI или меню (write/read/mixed)
   client: awscli
   # Один endpoint...
-  endpoint: "http://127.0.0.1:9000"
+  endpoint: "http://127.0.0.1:9080"
   # ...или кластерный режим (см. endpoint_mode: round-robin|random)
   # endpoints:
-  #   - "http://127.0.0.1:9000"
-  #   - "http://127.0.0.2:9000"
+  #   - "http://127.0.0.1:9080"
+  #   - "http://127.0.0.2:9080"
   # endpoint_mode: round-robin
   bucket: "your-bucket-name"
   # Варианты аутентификации:
