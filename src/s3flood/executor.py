@@ -478,7 +478,11 @@ def _get_aws_env(
     multipart_threshold: int | None = None,
     multipart_chunksize: int | None = None,
     max_concurrent_requests: int | None = None,
-) -> dict:
+) -> tuple[dict, str | None]:
+    """
+    Возвращает (env, temp_config_file).
+    temp_config_file - путь к временному конфиг-файлу, если нужно переопределить настройки multipart.
+    """
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
     # Отключаем автоматические checksums для совместимости с S3-совместимыми бекендами
@@ -495,21 +499,37 @@ def _get_aws_env(
     if max_concurrent_requests is not None:
         transfer_config["max_concurrent_requests"] = max_concurrent_requests
     
-    # Устанавливаем переменную окружения только если есть хотя бы один параметр
-    # Если все параметры None, AWS CLI будет использовать настройки из ~/.aws/config
-    # 
-    # ВАЖНО: AWS_CLI_FILE_TRANSFER_CONFIG может не переопределять ~/.aws/config в некоторых версиях AWS CLI.
-    # Если настройки не применяются, возможно, нужно использовать временный конфиг-файл или параметры командной строки.
+    # Создаем временный конфиг-файл для переопределения настроек multipart
+    # Это необходимо, так как переменные окружения не всегда переопределяют ~/.aws/config
+    temp_config_file = None
     if transfer_config:
+        # Создаем временный конфиг-файл с настройками multipart
+        import tempfile
+        temp_fd, temp_config_file = tempfile.mkstemp(suffix='.ini', prefix='s3flood_config_', text=True)
+        try:
+            with os.fdopen(temp_fd, 'w') as f:
+                f.write('[default]\n')
+                f.write('s3 =\n')
+                if "multipart_threshold" in transfer_config:
+                    threshold_mb = transfer_config["multipart_threshold"] / (1024 * 1024)
+                    f.write(f'    multipart_threshold = {int(threshold_mb)}MB\n')
+                if "multipart_chunksize" in transfer_config:
+                    chunksize_mb = transfer_config["multipart_chunksize"] / (1024 * 1024)
+                    f.write(f'    multipart_chunksize = {int(chunksize_mb)}MB\n')
+                if "max_concurrent_requests" in transfer_config:
+                    f.write(f'    max_concurrent_requests = {transfer_config["max_concurrent_requests"]}\n')
+        except Exception:
+            # Если не удалось создать временный файл, удаляем его и продолжаем без переопределения
+            if temp_config_file:
+                try:
+                    os.unlink(temp_config_file)
+                except Exception:
+                    pass
+                temp_config_file = None
+        
+        # Также устанавливаем переменные окружения на случай, если они сработают
         env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_config)
-        # Также устанавливаем переменные для boto3/s3transfer напрямую (на случай, если AWS CLI их не читает)
-        # Эти переменные используются boto3, который используется AWS CLI под капотом
-        if "multipart_threshold" in transfer_config:
-            env["AWS_S3_MULTIPART_THRESHOLD"] = str(transfer_config["multipart_threshold"])
-        if "multipart_chunksize" in transfer_config:
-            env["AWS_S3_MULTIPART_CHUNKSIZE"] = str(transfer_config["multipart_chunksize"])
-        if "max_concurrent_requests" in transfer_config:
-            env["AWS_S3_MAX_CONCURRENT_REQUESTS"] = str(transfer_config["max_concurrent_requests"])
+    
     if aws_profile:
         env["AWS_PROFILE"] = aws_profile
         env.pop("AWS_ACCESS_KEY_ID", None)
@@ -521,7 +541,7 @@ def _get_aws_env(
         env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
-    return env
+    return env, temp_config_file
 
 
 def aws_cp_upload(
@@ -541,15 +561,26 @@ def aws_cp_upload(
     AWS CLI автоматически определяет, использовать ли multipart upload на основе
     multipart_threshold из переменной окружения AWS_CLI_FILE_TRANSFER_CONFIG.
     """
-    env = _get_aws_env(
+    env, temp_config_file = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     # Всегда используем aws s3 cp - он автоматически выберет multipart или обычный PUT
-    # на основе multipart_threshold из переменных окружения
+    # на основе multipart_threshold из переменных окружения или временного конфиг-файла
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
-    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if temp_config_file:
+        cmd.extend(["--config-file", temp_config_file])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        return result
+    finally:
+        # Удаляем временный конфиг-файл после использования
+        if temp_config_file:
+            try:
+                os.unlink(temp_config_file)
+            except Exception:
+                pass
 
 
 def aws_list_objects(
@@ -563,13 +594,23 @@ def aws_list_objects(
     max_concurrent_requests: int | None = None,
 ):
     """Получает список объектов из бакета через s3api list-objects-v2."""
-    env = _get_aws_env(
+    env, temp_config_file = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket_name, "--endpoint-url", endpoint]
-    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if temp_config_file:
+        cmd.extend(["--config-file", temp_config_file])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        return res
+    finally:
+        if temp_config_file:
+            try:
+                os.unlink(temp_config_file)
+            except Exception:
+                pass
     if res.returncode != 0:
         return None
     try:
@@ -597,13 +638,22 @@ def aws_check_bucket_access(
     max_concurrent_requests: int | None = None,
 ):
     """Быстрая проверка доступа к бакету через s3api head-bucket."""
-    env = _get_aws_env(
+    env, temp_config_file = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "head-bucket", "--bucket", bucket_name, "--endpoint-url", endpoint]
-    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if temp_config_file:
+        cmd.extend(["--config-file", temp_config_file])
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    finally:
+        if temp_config_file:
+            try:
+                os.unlink(temp_config_file)
+            except Exception:
+                pass
 
 
 def aws_cp_download(
@@ -626,35 +676,45 @@ def aws_cp_download(
     Примечание: multipart upload используется только для upload, не для download.
     Но aws s3 cp использует оптимизации для download через параллельные range requests.
     """
-    env = _get_aws_env(
+    env, temp_config_file = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     # Используем aws s3 cp для download - он может использовать параллельные запросы для больших файлов
-    # max_concurrent_requests из AWS_CLI_FILE_TRANSFER_CONFIG влияет на количество параллельных запросов
+    # max_concurrent_requests из временного конфиг-файла влияет на количество параллельных запросов
     devnull = "NUL" if os.name == "nt" else "/dev/null"
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
-    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    # Если команда успешна (returncode == 0), возвращаем результат как есть
-    if res.returncode == 0:
+    if temp_config_file:
+        cmd.extend(["--config-file", temp_config_file])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        # Если команда успешна (returncode == 0), возвращаем результат как есть
+        if res.returncode == 0:
+            return res
+        # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
+        if res.returncode != 0 and res.stderr:
+            # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
+            # но данные уже загружены, так что это не критично
+            if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
+               ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
+                # Данные загружены успешно, просто не удалось обновить время модификации
+                # Создаём фиктивный успешный результат
+                class FakeResult:
+                    returncode = 0
+                    stdout = res.stdout
+                    stderr = ""
+                    args = res.args
+                return FakeResult()
+        # Для всех остальных ошибок возвращаем исходный результат
         return res
-    # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
-    if res.returncode != 0 and res.stderr:
-        # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
-        # но данные уже загружены, так что это не критично
-        if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
-           ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
-            # Данные загружены успешно, просто не удалось обновить время модификации
-            # Создаём фиктивный успешный результат
-            class FakeResult:
-                returncode = 0
-                stdout = res.stdout
-                stderr = ""
-                args = res.args
-            return FakeResult()
-    # Для всех остальных ошибок возвращаем исходный результат
-    return res
+    finally:
+        # Удаляем временный конфиг-файл после использования
+        if temp_config_file:
+            try:
+                os.unlink(temp_config_file)
+            except Exception:
+                pass
 
 
 def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwargs):
