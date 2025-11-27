@@ -21,6 +21,8 @@ import statistics
 from prompt_toolkit.completion import PathCompleter
 from typing import Optional, Union
 from urllib.parse import urlparse, urlunparse
+from prompt_toolkit.shortcuts import prompt as pt_prompt
+from prompt_toolkit.formatted_text import HTML
 
 from .config import load_run_config, RunConfigModel, resolve_run_settings
 from .dataset import plan_and_generate
@@ -29,6 +31,10 @@ from .executor import run_profile, aws_list_objects, aws_check_bucket_access, _g
 
 console = Console()
 path_completer = PathCompleter(expanduser=True, only_directories=True)
+ANSI_RESET = "\x1b[0m"
+ANSI_BOLD = "\x1b[1m"
+ANSI_CYAN = "\x1b[36m"
+ANSI_YELLOW = "\x1b[33m"
 
 
 def supports_emoji() -> bool:
@@ -754,6 +760,17 @@ def edit_config_menu():
 
     current['endpoints'] = ensure_list(current.get('endpoints'))
 
+    def prompt_inline(message: str, default_value: str = "", allow_empty: bool = True) -> Optional[str]:
+        prompt_msg = HTML(f"<ansiyellow>{message}</ansiyellow> ")
+        try:
+            answer = pt_prompt(prompt_msg, default=default_value or "")
+        except (KeyboardInterrupt, EOFError):
+            return None
+        if not answer and not allow_empty:
+            console.print("[red]Значение не может быть пустым.[/red]")
+            return prompt_inline(message, default_value, allow_empty)
+        return answer
+
     def format_value(value):
         if isinstance(value, bool):
             return 'yes' if value else 'no'
@@ -779,10 +796,13 @@ def edit_config_menu():
         if not mode:
             return
         if mode.startswith('Кластер'):
-            endpoints_str = questionary.text(
+            endpoints_str = prompt_inline(
                 "Endpoints (через запятую):",
-                default=','.join(current.get('endpoints') or []) or 'http://localhost:9000',
-            ).ask() or ','.join(current.get('endpoints') or [])
+                ','.join(current.get('endpoints') or []) or 'http://localhost:9000',
+                allow_empty=False,
+            )
+            if endpoints_str is None:
+                return
             endpoints = [normalize_endpoint_url(e.strip()) for e in endpoints_str.split(',') if e.strip()]
             endpoint_mode = questionary.select(
                 "Стратегия выбора endpoint:",
@@ -793,10 +813,13 @@ def edit_config_menu():
             current['endpoints'] = endpoints
             current['endpoint_mode'] = endpoint_mode
         else:
-            endpoint = questionary.text(
+            endpoint = prompt_inline(
                 "Endpoint (например, http://localhost:9000):",
-                default=current.get('endpoint') or 'http://localhost:9000',
-            ).ask() or current.get('endpoint') or 'http://localhost:9000'
+                current.get('endpoint') or 'http://localhost:9000',
+                allow_empty=False,
+            )
+            if endpoint is None:
+                return
             current['endpoint'] = normalize_endpoint_url(endpoint)
             current['endpoints'] = []
             current['endpoint_mode'] = None
@@ -804,47 +827,49 @@ def edit_config_menu():
     def edit_text(key, prompt, default_value="", allow_empty=True):
         value = current.get(key)
         default = default_value if default_value != "" else (str(value) if value is not None else '')
-        answer = questionary.text(prompt, default=default).ask()
+        answer = prompt_inline(f"{prompt} (Enter для сохранения)", default, allow_empty=allow_empty)
         if answer is None:
             return
         if not allow_empty and answer.strip() == '':
+            console.print("[red]Значение не может быть пустым.[/red]")
             return
-        current[key] = answer if answer != '' else None
+        current[key] = answer if answer.strip() != '' else None
 
     def edit_int(key, prompt, default=0, min_value=1):
         value = current.get(key)
         default_str = str(value) if value is not None else str(default)
-        answer = questionary.text(
-            prompt,
-            default=default_str,
-            validate=lambda v: (v.isdigit() and int(v) >= min_value) or f"Введите целое число ≥ {min_value}",
-        ).ask()
-        if answer is None or answer.strip() == '':
-            return
-        current[key] = int(answer)
+        while True:
+            answer = prompt_inline(f"{prompt} (целое ≥ {min_value})", default_str, allow_empty=False)
+            if answer is None:
+                return
+            stripped = answer.strip()
+            if not stripped.isdigit() or int(stripped) < min_value:
+                console.print(f"[red]Введите целое число ≥ {min_value}.[/red]")
+                continue
+            current[key] = int(stripped)
+            break
 
     def edit_float(key, prompt, allow_empty=True, min_value=None):
         value = current.get(key)
         default_str = '' if (value is None and allow_empty) else str(value or '')
 
-        def validator(val):
-            if val.strip() == '' and allow_empty:
-                return True
+        while True:
+            answer = prompt_inline(prompt, default_str, allow_empty=allow_empty)
+            if answer is None:
+                return
+            stripped = (answer or "").strip()
+            if stripped == "" and allow_empty:
+                current[key] = None
+                return
             try:
-                number = float(val)
+                number = float(stripped)
                 if min_value is not None and number < min_value:
-                    return f"Введите число ≥ {min_value}"
-                return True
+                    console.print(f"[red]Введите число ≥ {min_value}.[/red]")
+                    continue
+                current[key] = number
+                return
             except ValueError:
-                return "Введите число"
-
-        answer = questionary.text(prompt, default=default_str, validate=validator).ask()
-        if answer is None:
-            return
-        if answer.strip() == '' and allow_empty:
-            current[key] = None
-        elif answer.strip() != '':
-            current[key] = float(answer)
+                console.print("[red]Введите корректное число.[/red]")
 
     def toggle_bool(key):
         current[key] = not bool(current.get(key))
@@ -862,21 +887,22 @@ def edit_config_menu():
         default = current.get('mixed_read_ratio')
         if default is None:
             default = 0.7
-        answer = questionary.text(
-            "mixed_read_ratio (0.0 - 1.0):",
-            default=str(default),
-            validate=lambda v: (
-                v.strip() == ''
-                or (v.replace('.', '', 1).isdigit() and 0.0 <= float(v) <= 1.0)
-                or "Введите число от 0.0 до 1.0 или оставьте пустым"
-            ),
-        ).ask()
-        if answer is None:
-            return
-        if answer.strip() == '':
-            current['mixed_read_ratio'] = default
-        else:
-            current['mixed_read_ratio'] = float(answer)
+        while True:
+            answer = prompt_inline("mixed_read_ratio (0.0 - 1.0):", str(default), allow_empty=True)
+            if answer is None:
+                return
+            stripped = answer.strip()
+            if stripped == "":
+                current['mixed_read_ratio'] = default
+                return
+            try:
+                number = float(stripped)
+                if 0.0 <= number <= 1.0:
+                    current['mixed_read_ratio'] = number
+                    return
+            except ValueError:
+                pass
+            console.print("[red]Введите число от 0.0 до 1.0.[/red]")
 
     def format_size_for_display(val):
         if val is None:
@@ -890,21 +916,22 @@ def edit_config_menu():
 
     def edit_size_field(key, prompt):
         default = format_size_for_display(current.get(key))
-        answer = questionary.text(
-            prompt,
-            default=default,
-            validate=lambda v: (v.strip() == '' or validate_size_format(v)) or "Введите значение в формате MB (5120) или строку вида '5GB'",
-        ).ask()
-        if answer is None:
-            return
-        current[key] = answer.strip() if answer.strip() else None
+        while True:
+            answer = prompt_inline(prompt, default, allow_empty=True)
+            if answer is None:
+                return
+            stripped = answer.strip()
+            if stripped == "":
+                current[key] = None
+                return
+            if validate_size_format(stripped):
+                current[key] = stripped
+                return
+            console.print("[red]Введите значение в формате MB (5120) или строку вида '5GB'.[/red]")
 
     def edit_endpoints_raw():
         default = ','.join(current.get('endpoints') or [])
-        answer = questionary.text(
-            "Endpoints (через запятую):",
-            default=default,
-        ).ask()
+        answer = prompt_inline("Endpoints (через запятую):", default, allow_empty=True)
         if answer is None:
             return
         endpoints = [normalize_endpoint_url(e.strip()) for e in (answer or '').split(',') if e.strip()]
@@ -927,10 +954,11 @@ def edit_config_menu():
         current['endpoint_mode'] = next_mode
 
     def edit_endpoint_text():
-        answer = questionary.text(
+        answer = prompt_inline(
             "Endpoint (например, http://localhost:9000):",
-            default=current.get('endpoint') or '',
-        ).ask()
+            current.get('endpoint') or '',
+            allow_empty=True,
+        )
         if answer is None:
             return
         endpoint = answer.strip()
@@ -991,6 +1019,8 @@ def edit_config_menu():
         ("aws_cli_max_concurrent_requests", "aws_cli_max_concurrent_requests"),
     ]
 
+    last_selection = None
+
     while True:
         console.clear()
         console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
@@ -1017,13 +1047,8 @@ def edit_config_menu():
 
         def render_choice_title(key: str, label: str) -> str:
             value = row_texts.get(key, "—")
-            if row_changed.get(key):
-                marker = style("*", ANSI_BOLD, ANSI_YELLOW)
-                value_rendered = style(value, ANSI_BOLD, ANSI_YELLOW)
-            else:
-                marker = " "
-                value_rendered = style(value, ANSI_CYAN)
-            return f"{marker} {label:<32} {value_rendered}"
+            marker = "*" if row_changed.get(key) else " "
+            return f"{marker} {label:<32} {value}"
 
         choices = [
             questionary.Choice(title=render_choice_title(key, label), value=key)
@@ -1036,6 +1061,7 @@ def edit_config_menu():
             "Выберите параметр для изменения:",
             choices=choices,
             use_indicator=False,
+            default=last_selection,
         ).ask()
 
         if not selection or selection == 'cancel':
@@ -1047,6 +1073,7 @@ def edit_config_menu():
         handler = field_handlers.get(selection)
         if handler:
             handler()
+        last_selection = selection
 
     updated = dict(current)
     updated.pop('profile', None)
