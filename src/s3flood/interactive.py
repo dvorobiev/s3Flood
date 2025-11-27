@@ -18,15 +18,29 @@ import questionary
 import shutil
 import csv
 import statistics
-from prompt_toolkit.completion import PathCompleter
-from typing import Optional, Union
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, urlunparse
-from prompt_toolkit.shortcuts import prompt as pt_prompt
-from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit import prompt as pt_prompt
+from prompt_toolkit.completion import PathCompleter
+from prompt_toolkit.application import Application
+from prompt_toolkit.filters import Condition
+from prompt_toolkit.formatted_text import HTML, FormattedText
+from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.layout import HSplit, Layout, Window
+from prompt_toolkit.layout.containers import ConditionalContainer
+from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.dimension import Dimension
+from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import TextArea
 
 from .config import load_run_config, RunConfigModel, resolve_run_settings
+from .config_editor import build_default_config, edit_config_interactively
 from .dataset import plan_and_generate
 from .executor import run_profile, aws_list_objects, aws_check_bucket_access, _get_aws_env, get_spinner
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 console = Console()
@@ -96,6 +110,39 @@ class DotSpinner:
             console.file.write(f"\r{frame}")
             console.file.flush()
             time.sleep(0.1)
+
+
+def prompt_inline(message: str, default_value: str = "", allow_empty: bool = True) -> Optional[str]:
+    prompt_msg = HTML(f"<ansiyellow>{message}</ansiyellow> ")
+    try:
+        answer = pt_prompt(prompt_msg, default=default_value or "")
+    except (KeyboardInterrupt, EOFError):
+        return None
+    if not allow_empty and not (answer or "").strip():
+        console.print("[red]Значение не может быть пустым.[/red]")
+        return prompt_inline(message, default_value, allow_empty)
+    return answer
+
+
+def normalize_endpoint_url(value: str) -> str:
+    if not value:
+        return value
+    raw = value.strip()
+    if not raw:
+        return raw
+    if not raw.startswith(("http://", "https://")):
+        raw = f"http://{raw}"
+    parsed = urlparse(raw)
+    netloc = parsed.netloc or parsed.path
+    path = parsed.path if parsed.netloc else ""
+    if ":" not in netloc:
+        netloc = f"{netloc}:9080"
+    parsed = parsed._replace(
+        scheme=parsed.scheme or "http",
+        netloc=netloc,
+        path=path,
+    )
+    return urlunparse(parsed)
 
 
 def run_test_menu():
@@ -487,11 +534,10 @@ def create_dataset_menu():
 
 
 def create_config_wizard():
-    """Мастер создания нового конфигурационного файла."""
+    """Создание нового конфига через inline-редактор."""
     console.clear()
     console.rule(f"[bold yellow]{get_menu_emoji('📝', '')} Создать новый конфиг[/bold yellow]")
 
-    # Имя файла
     default_name = "config.new.yaml"
     target_path = questionary.text(
         "Имя файла конфига:",
@@ -509,141 +555,14 @@ def create_config_wizard():
             console.print("[yellow]Создание конфига отменено.[/yellow]")
             return
 
-    # Endpoint / endpoints
-    mode = questionary.select(
-        "Режим подключения:",
-        choices=[
-            "Один endpoint",
-            "Кластер (несколько endpoints)",
-        ],
-        use_indicator=False,
-    ).ask()
-    if not mode:
+    base_cfg = build_default_config()
+    edited = edit_config_interactively(base_cfg, f"Создать конфиг: {target_path}")
+    if edited is None:
+        console.print("[yellow]Создание конфига отменено.[/yellow]")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    if mode.startswith("Один"):
-        endpoint = questionary.text(
-            "Endpoint (например, http://localhost:9000):",
-            default="http://localhost:9000",
-        ).ask()
-        endpoints = None
-        endpoint_mode = None
-    else:
-        raw_eps = questionary.text(
-            "Список endpoints через запятую (http://node1:9000,http://node2:9000):",
-            default="http://node1:9000,http://node2:9000",
-        ).ask()
-        endpoints = [e.strip() for e in (raw_eps or "").split(",") if e.strip()]
-        endpoint = None
-        endpoint_mode = questionary.select(
-            "Режим выбора endpoint:",
-            choices=["round-robin", "random"],
-            default="round-robin",
-        ).ask()
-
-    # Bucket
-    bucket = questionary.text(
-        "Имя S3 бакета:",
-        default="your-bucket-name",
-    ).ask()
-    if not bucket:
-        console.print("[red]Бакет обязателен.[/red]")
-        return
-
-    # Аутентификация
-    auth_mode = questionary.select(
-        "Способ аутентификации:",
-        choices=[
-            "AWS профиль (aws_profile)",
-            "Access/Secret ключи",
-            "Без явных учётных данных",
-        ],
-        use_indicator=False,
-    ).ask()
-
-    access_key = secret_key = aws_profile = None
-    if auth_mode.startswith("AWS профиль"):
-        aws_profile = questionary.text(
-            "Имя AWS профиля (из ~/.aws/credentials):",
-            default="default",
-        ).ask()
-    elif auth_mode.startswith("Access/Secret"):
-        access_key = questionary.text("AWS Access Key ID:", default="YOUR_ACCESS_KEY").ask()
-        secret_key = questionary.text("AWS Secret Access Key:", default="YOUR_SECRET_KEY").ask()
-
-    # Базовые параметры
-    threads = questionary.text(
-        "Количество потоков:",
-        default="8",
-        validate=lambda v: (v.isdigit() and int(v) > 0) or "Введите целое число > 0",
-    ).ask()
-    threads = int(threads) if threads else 8
-
-    data_dir = questionary.text(
-        "Путь к датасету (data_dir):",
-        default="./loadset/data",
-    ).ask()
-    report = questionary.text(
-        "Имя JSON отчёта (report):",
-        default="out.json",
-    ).ask()
-    metrics = questionary.text(
-        "Имя CSV с метриками (metrics):",
-        default="out.csv",
-    ).ask()
-
-    # Дополнительные опции
-    infinite = questionary.confirm(
-        "Бесконечный режим (infinite)?", default=False
-    ).ask()
-
-    order = questionary.select(
-        "Порядок обработки файлов (order):",
-        choices=["sequential", "random"],
-        default="random",
-    ).ask()
-
-    unique_remote_names = questionary.confirm(
-        "Добавлять уникальный постфикс к именам объектов (unique_remote_names)?",
-        default=False,
-    ).ask()
-
-    # mixed_read_ratio и pattern оставляем по умолчанию, при необходимости пользователь добавит руками
-
-    run_cfg: dict[str, object] = {
-        "profile": "write",  # по умолчанию; может быть переопределён через CLI/меню
-        "client": "awscli",
-        "bucket": bucket,
-        "threads": threads,
-        "data_dir": data_dir,
-        "report": report,
-        "metrics": metrics,
-        "infinite": bool(infinite),
-        "order": order,
-        "unique_remote_names": bool(unique_remote_names),
-    }
-
-    if endpoint:
-        run_cfg["endpoint"] = endpoint
-    if endpoints:
-        run_cfg["endpoints"] = endpoints
-        if endpoint_mode:
-            run_cfg["endpoint_mode"] = endpoint_mode
-    if access_key and secret_key:
-        run_cfg["access_key"] = access_key
-        run_cfg["secret_key"] = secret_key
-    if aws_profile:
-        run_cfg["aws_profile"] = aws_profile
-
-    config_obj = {"run": run_cfg}
-
-    console.print("\n[bold]Итоговый конфиг:[/bold]")
-    console.print(Panel(yaml.safe_dump(config_obj, sort_keys=False, allow_unicode=True), title=target_path))
-
-    if not questionary.confirm("Сохранить этот конфиг?", default=True).ask():
-        console.print("[yellow]Сохранение отменено.[/yellow]")
-        return
-
+    config_obj = {"run": edited}
     try:
         with open(target_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(config_obj, f, sort_keys=False, allow_unicode=True)
@@ -685,7 +604,7 @@ def manage_configs_menu():
 
 
 def edit_config_menu():
-    """Интерактивное редактирование существующего конфига (построчное редактирование)."""
+    """Редактирование существующего конфига через inline-редактор (prompt_toolkit)."""
     console.clear()
     console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
 
@@ -715,375 +634,27 @@ def edit_config_menu():
     else:
         cfg_path = cwd / selected
 
+    # Читаем YAML как словарь, чтобы сохранить структуру файла
     try:
-        cfg_model = load_run_config(str(cfg_path))
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            raw_cfg = yaml.safe_load(f) or {}
     except Exception as exc:
-        console.print(f"[bold red]Не удалось прочитать или разобрать конфиг: {exc}[/bold red]")
+        console.print(f"[bold red]Не удалось прочитать конфиг: {exc}[/bold red]")
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    current = cfg_model.model_dump()
+    run_section = raw_cfg.get("run") or {}
+    edited = edit_config_interactively(run_section, f"Редактировать конфиг: {cfg_path}")
+    if edited is None:
+        console.print("[yellow]Изменения отменены.[/yellow]")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        return
 
-    def _clone_value(val):
-        if isinstance(val, list):
-            return list(val)
-        return val
-
-    initial_state = {k: _clone_value(v) for k, v in current.items()}
-
-    def normalize_endpoint_url(value: str) -> str:
-        if not value:
-            return value
-        raw = value.strip()
-        if not raw:
-            return raw
-        if not raw.startswith(("http://", "https://")):
-            raw = f"http://{raw}"
-        parsed = urlparse(raw)
-        netloc = parsed.netloc or parsed.path
-        path = parsed.path if parsed.netloc else ""
-        if ":" not in netloc:
-            netloc = f"{netloc}:9080"
-        parsed = parsed._replace(
-            scheme=parsed.scheme or "http",
-            netloc=netloc,
-            path=path,
-        )
-        return urlunparse(parsed)
-
-    def ensure_list(value):
-        if isinstance(value, list):
-            return [normalize_endpoint_url(v) for v in value if v]
-        if isinstance(value, str) and value.strip():
-            return [normalize_endpoint_url(v.strip()) for v in value.split(',') if v.strip()]
-        return []
-
-    current['endpoints'] = ensure_list(current.get('endpoints'))
-
-    def prompt_inline(message: str, default_value: str = "", allow_empty: bool = True) -> Optional[str]:
-        prompt_msg = HTML(f"<ansiyellow>{message}</ansiyellow> ")
-        try:
-            answer = pt_prompt(prompt_msg, default=default_value or "")
-        except (KeyboardInterrupt, EOFError):
-            return None
-        if not answer and not allow_empty:
-            console.print("[red]Значение не может быть пустым.[/red]")
-            return prompt_inline(message, default_value, allow_empty)
-        return answer
-
-    def format_value(value):
-        if isinstance(value, bool):
-            return 'yes' if value else 'no'
-        if isinstance(value, list):
-            return ', '.join(str(v) for v in value) if value else '—'
-        if value in (None, ''):
-            return '—'
-        return str(value)
-
-    def has_changed(key: str) -> bool:
-        init = initial_state.get(key)
-        curr = current.get(key)
-        if isinstance(init, list) or isinstance(curr, list):
-            return list(init or []) != list(curr or [])
-        return init != curr
-
-    def edit_connection():
-        mode = questionary.select(
-            "Режим подключения:",
-            choices=["Один endpoint", "Кластер (несколько endpoints)"],
-            default="Кластер (несколько endpoints)" if current.get('endpoints') else "Один endpoint",
-        ).ask()
-        if not mode:
-            return
-        if mode.startswith('Кластер'):
-            endpoints_str = prompt_inline(
-                "Endpoints (через запятую):",
-                ','.join(current.get('endpoints') or []) or 'http://localhost:9000',
-                allow_empty=False,
-            )
-            if endpoints_str is None:
-                return
-            endpoints = [normalize_endpoint_url(e.strip()) for e in endpoints_str.split(',') if e.strip()]
-            endpoint_mode = questionary.select(
-                "Стратегия выбора endpoint:",
-                choices=["round-robin", "random"],
-                default=current.get('endpoint_mode') if current.get('endpoint_mode') in ["round-robin", "random"] else "round-robin",
-            ).ask() or current.get('endpoint_mode') or 'round-robin'
-            current['endpoint'] = None
-            current['endpoints'] = endpoints
-            current['endpoint_mode'] = endpoint_mode
-        else:
-            endpoint = prompt_inline(
-                "Endpoint (например, http://localhost:9000):",
-                current.get('endpoint') or 'http://localhost:9000',
-                allow_empty=False,
-            )
-            if endpoint is None:
-                return
-            current['endpoint'] = normalize_endpoint_url(endpoint)
-            current['endpoints'] = []
-            current['endpoint_mode'] = None
-
-    def edit_text(key, prompt, default_value="", allow_empty=True):
-        value = current.get(key)
-        default = default_value if default_value != "" else (str(value) if value is not None else '')
-        answer = prompt_inline(f"{prompt} (Enter для сохранения)", default, allow_empty=allow_empty)
-        if answer is None:
-            return
-        if not allow_empty and answer.strip() == '':
-            console.print("[red]Значение не может быть пустым.[/red]")
-            return
-        current[key] = answer if answer.strip() != '' else None
-
-    def edit_int(key, prompt, default=0, min_value=1):
-        value = current.get(key)
-        default_str = str(value) if value is not None else str(default)
-        while True:
-            answer = prompt_inline(f"{prompt} (целое ≥ {min_value})", default_str, allow_empty=False)
-            if answer is None:
-                return
-            stripped = answer.strip()
-            if not stripped.isdigit() or int(stripped) < min_value:
-                console.print(f"[red]Введите целое число ≥ {min_value}.[/red]")
-                continue
-            current[key] = int(stripped)
-            break
-
-    def edit_float(key, prompt, allow_empty=True, min_value=None):
-        value = current.get(key)
-        default_str = '' if (value is None and allow_empty) else str(value or '')
-
-        while True:
-            answer = prompt_inline(prompt, default_str, allow_empty=allow_empty)
-            if answer is None:
-                return
-            stripped = (answer or "").strip()
-            if stripped == "" and allow_empty:
-                current[key] = None
-                return
-            try:
-                number = float(stripped)
-                if min_value is not None and number < min_value:
-                    console.print(f"[red]Введите число ≥ {min_value}.[/red]")
-                    continue
-                current[key] = number
-                return
-            except ValueError:
-                console.print("[red]Введите корректное число.[/red]")
-
-    def toggle_bool(key):
-        current[key] = not bool(current.get(key))
-
-    def cycle_choice(key, choices):
-        if not choices:
-            return
-        value = current.get(key)
-        if value not in choices:
-            value = choices[0]
-        idx = choices.index(value)
-        current[key] = choices[(idx + 1) % len(choices)]
-
-    def edit_mixed_ratio():
-        default = current.get('mixed_read_ratio')
-        if default is None:
-            default = 0.7
-        while True:
-            answer = prompt_inline("mixed_read_ratio (0.0 - 1.0):", str(default), allow_empty=True)
-            if answer is None:
-                return
-            stripped = answer.strip()
-            if stripped == "":
-                current['mixed_read_ratio'] = default
-                return
-            try:
-                number = float(stripped)
-                if 0.0 <= number <= 1.0:
-                    current['mixed_read_ratio'] = number
-                    return
-            except ValueError:
-                pass
-            console.print("[red]Введите число от 0.0 до 1.0.[/red]")
-
-    def format_size_for_display(val):
-        if val is None:
-            return ''
-        if isinstance(val, str):
-            return val
-        mb = val / (1024 * 1024)
-        if mb >= 1024:
-            return f"{mb / 1024:.1f}GB"
-        return f"{int(mb)}MB"
-
-    def edit_size_field(key, prompt):
-        default = format_size_for_display(current.get(key))
-        while True:
-            answer = prompt_inline(prompt, default, allow_empty=True)
-            if answer is None:
-                return
-            stripped = answer.strip()
-            if stripped == "":
-                current[key] = None
-                return
-            if validate_size_format(stripped):
-                current[key] = stripped
-                return
-            console.print("[red]Введите значение в формате MB (5120) или строку вида '5GB'.[/red]")
-
-    def edit_endpoints_raw():
-        default = ','.join(current.get('endpoints') or [])
-        answer = prompt_inline("Endpoints (через запятую):", default, allow_empty=True)
-        if answer is None:
-            return
-        endpoints = [normalize_endpoint_url(e.strip()) for e in (answer or '').split(',') if e.strip()]
-        current['endpoints'] = endpoints
-        if endpoints:
-            current['endpoint'] = None
-            if current.get('endpoint_mode') not in ['round-robin', 'random']:
-                current['endpoint_mode'] = 'round-robin'
-
-    def edit_endpoint_mode():
-        if not current.get('endpoints'):
-            console.print("[yellow]Режим подключения доступен только для кластерных endpoints.[/yellow]")
-            questionary.press_any_key_to_continue("Нажмите любую клавишу, чтобы вернуться к списку...").ask()
-            return
-        options = ["round-robin", "random"]
-        current_mode = current.get('endpoint_mode')
-        if current_mode not in options:
-            current_mode = options[0]
-        next_mode = options[(options.index(current_mode) + 1) % len(options)]
-        current['endpoint_mode'] = next_mode
-
-    def edit_endpoint_text():
-        answer = prompt_inline(
-            "Endpoint (например, http://localhost:9000):",
-            current.get('endpoint') or '',
-            allow_empty=True,
-        )
-        if answer is None:
-            return
-        endpoint = answer.strip()
-        current['endpoint'] = normalize_endpoint_url(endpoint) if endpoint else None
-        if endpoint:
-            current['endpoints'] = []
-            current['endpoint_mode'] = None
-
-    def toggle_pattern():
-        cycle_choice("pattern", ["sustained", "bursty"])
-        if current.get("pattern") == "bursty":
-            if current.get("burst_duration_sec") is None:
-                current["burst_duration_sec"] = 60.0
-            if current.get("burst_intensity_multiplier") is None:
-                current["burst_intensity_multiplier"] = 5.0
-
-    field_handlers = {
-        "connection": edit_connection,
-        "bucket": lambda: edit_text("bucket", "Bucket:", default_value=current.get('bucket') or ""),
-        "endpoint": edit_endpoint_text,
-        "endpoints": edit_endpoints_raw,
-        "endpoint_mode": edit_endpoint_mode,
-        "threads": lambda: edit_int("threads", "Число потоков:", default=current.get('threads') or 8),
-        "data_dir": lambda: edit_text("data_dir", "Каталог датасета (data_dir):", default_value=current.get('data_dir') or './loadset/data'),
-        "report": lambda: edit_text("report", "Имя файла отчёта (JSON):", default_value=current.get('report') or 'report.json'),
-        "metrics": lambda: edit_text("metrics", "Имя файла метрик (CSV):", default_value=current.get('metrics') or 'metrics.csv'),
-        "infinite": lambda: toggle_bool("infinite"),
-        "mixed_read_ratio": edit_mixed_ratio,
-        "unique_remote_names": lambda: toggle_bool("unique_remote_names"),
-        "pattern": toggle_pattern,
-        "burst_duration_sec": lambda: edit_float("burst_duration_sec", "burst_duration_sec (сек):", allow_empty=True, min_value=0.0),
-        "burst_intensity_multiplier": lambda: edit_float("burst_intensity_multiplier", "burst_intensity_multiplier:", allow_empty=True, min_value=1.0),
-        "order": lambda: cycle_choice("order", ["sequential", "random"]),
-        "aws_cli_multipart_threshold": lambda: edit_size_field("aws_cli_multipart_threshold", "aws_cli_multipart_threshold (MB или '5GB'):"),
-        "aws_cli_multipart_chunksize": lambda: edit_size_field("aws_cli_multipart_chunksize", "aws_cli_multipart_chunksize (MB или '8MB'):"),
-        "aws_cli_max_concurrent_requests": lambda: edit_int("aws_cli_max_concurrent_requests", "aws_cli_max_concurrent_requests:", default=current.get('aws_cli_max_concurrent_requests') or 10, min_value=1),
-    }
-
-    field_order = [
-        ("connection", "Режим подключения"),
-        ("bucket", "bucket"),
-        ("endpoint", "endpoint"),
-        ("endpoints", "endpoints"),
-        ("endpoint_mode", "endpoint_mode"),
-        ("threads", "threads"),
-        ("data_dir", "data_dir"),
-        ("report", "report"),
-        ("metrics", "metrics"),
-        ("infinite", "infinite"),
-        ("mixed_read_ratio", "mixed_read_ratio"),
-        ("unique_remote_names", "unique_remote_names"),
-        ("pattern", "pattern"),
-        ("burst_duration_sec", "burst_duration_sec"),
-        ("burst_intensity_multiplier", "burst_intensity_multiplier"),
-        ("order", "order"),
-        ("aws_cli_multipart_threshold", "aws_cli_multipart_threshold"),
-        ("aws_cli_multipart_chunksize", "aws_cli_multipart_chunksize"),
-        ("aws_cli_max_concurrent_requests", "aws_cli_max_concurrent_requests"),
-    ]
-
-    last_selection = None
-
-    while True:
-        console.clear()
-        console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
-        console.print(f"[bold]Файл:[/bold] [cyan]{cfg_path}[/cyan]")
-        console.print("[dim]Enter — изменить значение. Для переключаемых полей (Yes/No, порядок) переключение происходит сразу.[/dim]\n")
-
-        row_texts = {}
-        row_changed = {}
-
-        for key, label in field_order:
-            if key == 'connection':
-                if current.get('endpoint'):
-                    value = f"Один endpoint ({current['endpoint']})"
-                elif current.get('endpoints'):
-                    value = f"Кластер ({len(current['endpoints'])} endpoint)"
-                else:
-                    value = '—'
-                changed = has_changed('endpoint') or has_changed('endpoints') or has_changed('endpoint_mode')
-            else:
-                value = format_value(current.get(key))
-                changed = has_changed(key)
-            row_texts[key] = value
-            row_changed[key] = changed
-
-        def render_choice_title(key: str, label: str) -> str:
-            value = row_texts.get(key, "—")
-            marker = "*" if row_changed.get(key) else " "
-            return f"{marker} {label:<32} {value}"
-
-        choices = [
-            questionary.Choice(title=render_choice_title(key, label), value=key)
-            for key, label in field_order
-        ]
-        choices.append(questionary.Choice(title="Сохранить изменения", value="save"))
-        choices.append(questionary.Choice(title="Отмена", value="cancel"))
-
-        selection = questionary.select(
-            "Выберите параметр для изменения:",
-            choices=choices,
-            use_indicator=False,
-            default=last_selection,
-        ).ask()
-
-        if not selection or selection == 'cancel':
-            console.print("[yellow]Изменения отменены.[/yellow]")
-            questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
-            return
-        if selection == 'save':
-            break
-        handler = field_handlers.get(selection)
-        if handler:
-            handler()
-        last_selection = selection
-
-    updated = dict(current)
-    updated.pop('profile', None)
-    updated['endpoints'] = ensure_list(updated.get('endpoints'))
-
+    raw_cfg["run"] = edited
     try:
-        out = {'run': {k: v for k, v in updated.items() if v is not None}}
-        with open(cfg_path, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(out, f, sort_keys=False, allow_unicode=True)
-        console.print(f"[bold green]✅ Конфиг обновлён: {cfg_path}[/bold green]")
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(raw_cfg, f, sort_keys=False, allow_unicode=True)
+        console.print(f"[bold green]✅ Конфиг сохранён: {cfg_path}[/bold green]")
     except Exception as exc:
         console.print(f"[bold red]Ошибка при сохранении конфига: {exc}[/bold red]")
 
