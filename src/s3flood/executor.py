@@ -133,13 +133,24 @@ def _format_cli_size(value: int) -> str:
     return f"{value}B"
 
 
-def _ensure_custom_aws_config(source_profile: str | None, s3_settings: dict[str, str]) -> Path:
+def _ensure_custom_aws_config(
+    source_profile: str | None,
+    s3_settings: dict[str, str],
+    access_key: str | None,
+    secret_key: str | None,
+) -> Path:
     """
     Создаёт отдельный AWS config с нужными параметрами S3 и (опционально) source_profile.
     """
     global _custom_config_signature
     region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
-    signature = (tuple(sorted(s3_settings.items())), source_profile, region)
+    signature = (
+        tuple(sorted(s3_settings.items())),
+        source_profile,
+        region,
+        access_key,
+        secret_key,
+    )
     with _custom_config_lock:
         if _custom_config_signature == signature and CUSTOM_AWS_CONFIG_PATH.exists():
             return CUSTOM_AWS_CONFIG_PATH
@@ -153,6 +164,9 @@ def _ensure_custom_aws_config(source_profile: str | None, s3_settings: dict[str,
             block_lines.append("s3 =")
             for key, value in s3_settings.items():
                 block_lines.append(f"    {key} = {value}")
+        if access_key and secret_key:
+            block_lines.append(f"aws_access_key_id = {access_key}")
+            block_lines.append(f"aws_secret_access_key = {secret_key}")
 
         config_content = "\n".join(block_lines).strip() + "\n"
         CUSTOM_AWS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -548,7 +562,7 @@ def _get_aws_env(
     if max_concurrent_requests is not None:
         s3_settings["max_concurrent_requests"] = str(max_concurrent_requests)
 
-    custom_path = _ensure_custom_aws_config(aws_profile, s3_settings)
+    custom_path = _ensure_custom_aws_config(aws_profile, s3_settings, access_key, secret_key)
     env["AWS_CONFIG_FILE"] = str(custom_path)
     profile_to_use: str | None = CUSTOM_AWS_PROFILE
 
