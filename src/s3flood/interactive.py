@@ -1209,7 +1209,14 @@ def validate_config_menu():
             questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
             return
 
-        env = _get_aws_env(settings.access_key, settings.secret_key, settings.aws_profile)
+        env, profile_name = _get_aws_env(
+            settings.access_key,
+            settings.secret_key,
+            settings.aws_profile,
+            getattr(settings, "aws_cli_multipart_threshold", None),
+            getattr(settings, "aws_cli_multipart_chunksize", None),
+            getattr(settings, "aws_cli_max_concurrent_requests", None),
+        )
         bucket_name = settings.bucket.replace("s3://", "").split("/")[0]
         url = f"s3://{bucket_name}"
         cmd = [
@@ -1221,6 +1228,8 @@ def validate_config_menu():
             "--endpoint-url",
             primary_endpoint,
         ]
+        if profile_name:
+            cmd.extend(["--profile", profile_name])
         console.print(f"\n[bold]Выполняем:[/bold] {' '.join(cmd)}\n")
         try:
             with DotSpinner():
