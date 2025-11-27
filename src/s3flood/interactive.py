@@ -8,7 +8,9 @@ from rich.table import Table
 from rich.text import Text
 from pathlib import Path
 import argparse
+import os
 import subprocess
+import sys
 import time
 import threading
 import yaml
@@ -28,6 +30,28 @@ console = Console()
 path_completer = PathCompleter(expanduser=True, only_directories=True)
 
 
+def supports_emoji() -> bool:
+    """Проверяет, поддерживает ли терминал эмодзи."""
+    try:
+        # Проверяем через переменные окружения и capabilities терминала
+        term = os.environ.get("TERM", "")
+        # Если терминал поддерживает UTF-8, скорее всего поддерживает эмодзи
+        if "UTF" in os.environ.get("LANG", "").upper() or "UTF" in os.environ.get("LC_ALL", "").upper():
+            return True
+        # Проверяем через попытку вывода эмодзи
+        import sys
+        if hasattr(sys.stdout, "encoding") and sys.stdout.encoding:
+            return "utf" in sys.stdout.encoding.lower()
+        return False
+    except Exception:
+        return False
+
+
+def get_menu_emoji(emoji: str, fallback: str = "") -> str:
+    """Возвращает эмодзи или fallback в зависимости от поддержки."""
+    return emoji if supports_emoji() else fallback
+
+
 def format_bytes_to_readable(bytes_val: Optional[int]) -> str:
     """Конвертирует байты в читаемый формат (MB или GB)."""
     if bytes_val is None:
@@ -39,17 +63,13 @@ def format_bytes_to_readable(bytes_val: Optional[int]) -> str:
 
 
 class DotSpinner:
-    """Простой спиннер из точек для индикации длительных операций."""
+    """Простой спиннер для индикации длительных операций."""
 
-    def __init__(self, message: str = ""):
+    def __init__(self):
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._message = message
 
     def __enter__(self):
-        if self._message:
-            # Сообщение — отдельной строкой, чтобы не мешать другим выводам
-            console.print(self._message, style="dim")
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
         return self
@@ -58,15 +78,15 @@ class DotSpinner:
         self._stop.set()
         if self._thread is not None:
             self._thread.join()
-        # Перенос строки после спиннера
-        console.file.write("\n")
+        # Очищаем строку со спиннером
+        console.print("\r" + " " * 80 + "\r", end="", soft_wrap=False)
         console.file.flush()
 
     def _run(self):
         while not self._stop.is_set():
             # Используем тот же спиннер, что и в дашборде
             frame = get_spinner()
-            console.print(frame, end="\r", soft_wrap=False)
+            console.print(f"\r{frame}", end="", soft_wrap=False)
             console.file.flush()
             time.sleep(0.1)
 
@@ -86,7 +106,7 @@ def run_test_menu():
     choice = questionary.select(
         "Выберите конфиг:",
         choices=choices,
-        use_indicator=True,
+        use_indicator=False,
     ).ask()
     if not choice or choice == "Вернуться в главное меню":
         return
@@ -106,10 +126,11 @@ def run_test_menu():
     profile = questionary.select(
         "Выберите профиль нагрузки:",
         choices=[
-            "🔺 write — только запись",
-            "🔻 read  — только чтение",
-            "🔀 mixed — смешанный профиль",
+            f"{get_menu_emoji('🔺', 'W')} write — только запись",
+            f"{get_menu_emoji('🔻', 'R')} read  — только чтение",
+            f"{get_menu_emoji('🔀', 'M')} mixed — смешанный профиль",
         ],
+        use_indicator=False
     ).ask()
     if not profile:
         return
@@ -204,7 +225,9 @@ def run_test_menu():
     console.print(summary_table)
 
     # Возможность переопределить ключевые параметры перед запуском
+    params_changed = False
     if questionary.confirm("Изменить параметры перед запуском?", default=False).ask():
+        params_changed = True
         # data_dir
         data_dir_new = questionary.path(
             "Каталог датасета (data_dir):",
@@ -276,8 +299,13 @@ def run_test_menu():
             if settings.aws_cli_max_concurrent_requests is not None:
                 final_table.add_row("  max_concurrent_requests:", str(settings.aws_cli_max_concurrent_requests))
         console.print(final_table)
+    else:
+        # Если параметры не меняли, сразу запускаем без дополнительного промпта
+        console.print()
 
-    questionary.press_any_key_to_continue("Нажмите любую клавишу для запуска...").ask()
+    # Показываем промпт только если меняли параметры
+    if params_changed:
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для запуска...").ask()
 
     # Запуск профиля (у самого теста уже есть свой спиннер в дашборде)
     try:
@@ -434,7 +462,8 @@ def create_dataset_menu():
     # Создание датасета
     try:
         console.print()
-        with DotSpinner("Создание датасета"):
+        console.print("[dim]Создание датасета...[/dim]")
+        with DotSpinner():
             plan_and_generate(
                 path=path,
                 target_bytes=target_bytes,
@@ -453,7 +482,7 @@ def create_dataset_menu():
 def create_config_wizard():
     """Мастер создания нового конфигурационного файла."""
     console.clear()
-    console.rule("[bold yellow]📝 Создать новый конфиг[/bold yellow]")
+    console.rule(f"[bold yellow]{get_menu_emoji('📝', '')} Создать новый конфиг[/bold yellow]")
 
     # Имя файла
     default_name = "config.new.yaml"
@@ -480,7 +509,7 @@ def create_config_wizard():
             "Один endpoint",
             "Кластер (несколько endpoints)",
         ],
-        use_indicator=True,
+        use_indicator=False,
     ).ask()
     if not mode:
         return
@@ -522,7 +551,7 @@ def create_config_wizard():
             "Access/Secret ключи",
             "Без явных учётных данных",
         ],
-        use_indicator=True,
+        use_indicator=False,
     ).ask()
 
     access_key = secret_key = aws_profile = None
@@ -626,23 +655,23 @@ def manage_configs_menu():
         choice = questionary.select(
             "Выберите действие:",
             choices=[
-                "📝 Создать новый конфиг",
-                "🔍 Проверить / управлять конфигом",
-                "✏️ Редактировать существующий конфиг",
+                f"{get_menu_emoji('📝', '[1]')} Создать новый конфиг",
+                f"{get_menu_emoji('🔍', '[2]')} Проверить / управлять конфигом",
+                f"{get_menu_emoji('✏️', '[3]')} Редактировать существующий конфиг",
                 questionary.Separator(),
-                "⬅️ Вернуться в главное меню",
+                f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню",
             ],
-            use_indicator=True,
+            use_indicator=False,
         ).ask()
 
-        if not choice or choice.startswith("⬅️"):
+        if not choice or get_menu_emoji("⬅️", "[0]") in choice or choice.startswith("⬅️"):
             return
 
-        if choice.startswith("📝"):
+        if get_menu_emoji("📝", "[1]") in choice or "Создать новый конфиг" in choice:
             create_config_wizard()
-        elif choice.startswith("🔍"):
+        elif get_menu_emoji("🔍", "[2]") in choice or "Проверить / управлять конфигом" in choice:
             validate_config_menu()
-        elif choice.startswith("✏️"):
+        elif get_menu_emoji("✏️", "[3]") in choice or "Редактировать существующий конфиг" in choice:
             edit_config_menu()
         else:
             return
@@ -651,19 +680,19 @@ def manage_configs_menu():
 def edit_config_menu():
     """Интерактивное редактирование существующего конфига (основные поля)."""
     console.clear()
-    console.rule("[bold yellow]✏️ Редактировать конфиг[/bold yellow]")
+    console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
 
     # Выбор конфига
     cwd = Path(".").resolve()
     configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
     choices = [str(cfg.name) for cfg in configs]
-    choices.append("📂 Ввести путь вручную")
-    choices.append("⬅️ Вернуться в главное меню")
+    choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
+    choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
     choice = questionary.select(
         "Выберите конфиг для редактирования:",
         choices=choices,
-        use_indicator=True,
+        use_indicator=False,
     ).ask()
     if not choice or choice.startswith("⬅️"):
         return
@@ -960,19 +989,19 @@ def edit_config_menu():
 def validate_config_menu():
     """Меню проверки конфига: базовая валидация и работа с бакетом."""
     console.clear()
-    console.rule("[bold yellow]🔍 Проверить конфиг[/bold yellow]")
+    console.rule(f"[bold yellow]{get_menu_emoji('🔍', '')} Проверить конфиг[/bold yellow]")
 
     # Выбор конфига (список config*.yml/yaml + ручной ввод)
     cwd = Path(".").resolve()
     configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
     choices = [str(cfg.name) for cfg in configs]
-    choices.append("📂 Ввести путь вручную")
-    choices.append("⬅️ Вернуться в главное меню")
+    choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
+    choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
     choice = questionary.select(
         "Выберите конфиг:",
         choices=choices,
-        use_indicator=True,
+        use_indicator=False,
     ).ask()
     if not choice or choice.startswith("⬅️"):
         return
@@ -1192,9 +1221,9 @@ def validate_config_menu():
             "--endpoint-url",
             primary_endpoint,
         ]
-        console.print(f"\n[bold red]Выполняем:[/bold red] {' '.join(cmd)}")
+        console.print(f"\n[bold]Выполняем:[/bold] {' '.join(cmd)}\n")
         try:
-            with DotSpinner("Удаление объектов из бакета"):
+            with DotSpinner():
                 res = subprocess.run(cmd, env=env, capture_output=True, text=True)
             if res.returncode == 0:
                 console.print("[bold green]✅ Все объекты в бакете удалены (команда aws s3 rm вернула 0).[/bold green]")
@@ -1223,12 +1252,12 @@ def view_metrics_menu():
         return
 
     choices = [f.name for f in csv_files]
-    choices.append("⬅️ Вернуться в главное меню")
+    choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
     choice = questionary.select(
         "Выберите CSV с метриками:",
         choices=choices,
-        use_indicator=True,
+        use_indicator=False,
     ).ask()
     if not choice or choice.startswith("⬅️"):
         return
@@ -1336,14 +1365,14 @@ def run_interactive():
         choice = questionary.select(
             "Выберите действие:",
             choices=[
-                "🚀 Запустить тест",
-                "📦 Создать датасет",
-                "🧩 Конфиги и проверка",
-                "📊 Просмотр метрик",
+                f"{get_menu_emoji('🚀', '[1]')} Запустить тест",
+                f"{get_menu_emoji('📦', '[2]')} Создать датасет",
+                f"{get_menu_emoji('🧩', '[3]')} Конфиги и проверка",
+                f"{get_menu_emoji('📊', '[4]')} Просмотр метрик",
                 questionary.Separator(),
-                "⬅️ Выход"
+                f"{get_menu_emoji('⬅️', '[0]')} Выход"
             ],
-            use_indicator=True
+            use_indicator=False
         ).ask()
 
         if choice is None or choice.startswith("⬅️"):
