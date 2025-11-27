@@ -1173,8 +1173,9 @@ def validate_config_menu():
         return
 
     console.print(f"[green]Найдено объектов:[/green] {len(objects)}")
-    preview = objects[:5]
-    table = Table(title="Первые 5 объектов", box=None)
+    preview_count = min(len(objects), 5)
+    preview = objects[:preview_count]
+    table = Table(title=f"Первые {preview_count} объектов", box=None)
     table.add_column("Key", style="cyan")
     table.add_column("Size (MB)", style="white", justify="right")
     for obj in preview:
