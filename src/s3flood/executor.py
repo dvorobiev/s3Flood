@@ -471,6 +471,53 @@ class Metrics:
         return out
 
 
+def _cleanup_aws_profile_section(profile_name: str):
+    """
+    Удаляет все секции профиля из ~/.aws/config, чтобы избежать дубликатов.
+    """
+    config_path = os.path.expanduser("~/.aws/config")
+    if not os.path.exists(config_path):
+        return
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        # Удаляем все секции [profile profile_name] и все их параметры до следующей секции
+        new_lines = []
+        skip_section = False
+        for line in lines:
+            # Проверяем начало секции профиля
+            if line.strip() == f"[profile {profile_name}]":
+                skip_section = True
+                continue
+            
+            # Если мы внутри секции профиля
+            if skip_section:
+                # Если встретили другую секцию (начинается с [), прекращаем пропуск
+                if line.strip().startswith('['):
+                    skip_section = False
+                    new_lines.append(line)
+                    continue
+                # Пропускаем все строки с отступами (параметры секции) и пустые строки
+                # Параметры секции могут быть на разных уровнях вложенности
+                stripped = line.lstrip()
+                if not stripped or line.startswith(' ') or line.startswith('\t'):
+                    continue
+                # Если встретили строку без отступа и не секцию - это ошибка формата, но прекращаем пропуск
+                skip_section = False
+                new_lines.append(line)
+            else:
+                new_lines.append(line)
+        
+        # Записываем обновленный конфиг
+        with open(config_path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+    except Exception:
+        # Если не удалось очистить, продолжаем - aws configure set может перезаписать
+        pass
+
+
 def _configure_aws_profile_multipart(
     profile_name: str,
     multipart_threshold: int | None = None,
@@ -480,7 +527,12 @@ def _configure_aws_profile_multipart(
     """
     Настраивает параметры multipart для указанного AWS CLI профиля.
     Использует aws configure set для динамического обновления настроек.
+    Перед установкой очищает существующую секцию профиля, чтобы избежать дубликатов.
     """
+    # Очищаем существующую секцию профиля перед созданием новой
+    _cleanup_aws_profile_section(profile_name)
+    
+    # Устанавливаем параметры через aws configure set
     if multipart_threshold is not None:
         threshold_mb = int(multipart_threshold / (1024 * 1024))
         subprocess.run(
