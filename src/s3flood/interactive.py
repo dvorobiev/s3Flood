@@ -678,313 +678,335 @@ def manage_configs_menu():
 
 
 def edit_config_menu():
-    """Интерактивное редактирование существующего конфига (основные поля)."""
+    """Интерактивное редактирование существующего конфига (построчное редактирование)."""
     console.clear()
     console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
 
-    # Выбор конфига
-    cwd = Path(".").resolve()
-    configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
+    cwd = Path('.').resolve()
+    configs = sorted(list(cwd.glob('config*.yml')) + list(cwd.glob('config*.yaml')))
     choices = [str(cfg.name) for cfg in configs]
-    choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
+    choices.append(f"{get_menu_emoji('📂', '[+]' )} Ввести путь вручную")
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
-    choice = questionary.select(
+    selected = questionary.select(
         "Выберите конфиг для редактирования:",
         choices=choices,
         use_indicator=False,
     ).ask()
-    if not choice or choice.startswith("⬅️"):
+    if not selected or selected.startswith('⬅️'):
         return
 
-    if choice.startswith("📂"):
+    if selected.startswith('📂'):
         path_str = questionary.path(
             "Путь к YAML-конфигу:",
             completer=path_completer,
-            validate=lambda p: Path(p).is_file() or "Файл не найден",
+            validate=lambda p: Path(p).is_file() or 'Файл не найден',
         ).ask()
         if not path_str:
             return
         cfg_path = Path(path_str).expanduser()
     else:
-        cfg_path = cwd / choice
+        cfg_path = cwd / selected
 
-    # Загрузка и преобразование в dict
     try:
         cfg_model = load_run_config(str(cfg_path))
-    except Exception as e:
-        console.print(f"[bold red]Не удалось прочитать или разобрать конфиг: {e}[/bold red]")
+    except Exception as exc:
+        console.print(f"[bold red]Не удалось прочитать или разобрать конфиг: {exc}[/bold red]")
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    data = cfg_model.model_dump()
+    current = cfg_model.model_dump()
 
-    console.print(f"[bold]Редактирование конфига:[/bold] [cyan]{cfg_path}[/cyan]\n")
+    def ensure_list(value):
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str) and value.strip():
+            return [v.strip() for v in value.split(',') if v.strip()]
+        return []
 
-    # Сводка текущих настроек (без профиля нагрузки — он выбирается при запуске)
-    summary = Table(show_header=False, box=None)
-    summary.add_column(style="cyan")
-    summary.add_column(style="white")
-    summary.add_row("bucket", str(data.get("bucket") or ""))
-    summary.add_row("endpoint", str(data.get("endpoint") or ""))
-    endpoints_list = data.get("endpoints") or []
-    summary.add_row("endpoints", ", ".join(str(e) for e in endpoints_list))
-    summary.add_row("endpoint_mode", str(data.get("endpoint_mode") or ""))
-    summary.add_row("threads", str(data.get("threads") or ""))
-    summary.add_row("data_dir", str(data.get("data_dir") or ""))
-    summary.add_row("report", str(data.get("report") or ""))
-    summary.add_row("metrics", str(data.get("metrics") or ""))
-    summary.add_row("infinite", str(data.get("infinite") or "False"))
-    summary.add_row("mixed_read_ratio", str(data.get("mixed_read_ratio") or ""))
-    summary.add_row("unique_remote_names", str(data.get("unique_remote_names") or "False"))
-    summary.add_row("pattern", str(data.get("pattern") or "sustained"))
-    summary.add_row("burst_duration_sec", str(data.get("burst_duration_sec") or ""))
-    summary.add_row("burst_intensity_multiplier", str(data.get("burst_intensity_multiplier") or ""))
-    summary.add_row("order", str(data.get("order") or "sequential"))
-    if data.get("aws_cli_multipart_threshold") is not None:
-        summary.add_row("aws_cli_multipart_threshold", str(data.get("aws_cli_multipart_threshold")))
-    if data.get("aws_cli_multipart_chunksize") is not None:
-        summary.add_row("aws_cli_multipart_chunksize", str(data.get("aws_cli_multipart_chunksize")))
-    if data.get("aws_cli_max_concurrent_requests") is not None:
-        summary.add_row("aws_cli_max_concurrent_requests", str(data.get("aws_cli_max_concurrent_requests")))
-    console.print(summary)
-    console.print()  # пустая строка перед вопросами
+    current['endpoints'] = ensure_list(current.get('endpoints'))
 
-    # Endpoint / endpoints
-    endpoint_default = data.get("endpoint") or ""
-    endpoints_default_list = data.get("endpoints") or []
-    endpoints_default = ",".join(endpoints_default_list)
-    endpoint_mode_default = data.get("endpoint_mode") or "round-robin"
+    def format_value(value):
+        if isinstance(value, bool):
+            return 'yes' if value else 'no'
+        if isinstance(value, list):
+            return ', '.join(str(v) for v in value) if value else '—'
+        if value in (None, ''):
+            return '—'
+        return str(value)
 
-    mode = questionary.select(
-        "Режим подключения:",
-        choices=["Один endpoint", "Кластер (несколько endpoints)"],
-        default="Кластер (несколько endpoints)" if endpoints_default_list else "Один endpoint",
-    ).ask()
-    if not mode:
-        return
+    def edit_connection():
+        mode = questionary.select(
+            "Режим подключения:",
+            choices=["Один endpoint", "Кластер (несколько endpoints)"],
+            default="Кластер (несколько endpoints)" if current.get('endpoints') else "Один endpoint",
+        ).ask()
+        if not mode:
+            return
+        if mode.startswith('Кластер'):
+            endpoints_str = questionary.text(
+                "Endpoints (через запятую):",
+                default=','.join(current.get('endpoints') or []) or 'http://localhost:9000',
+            ).ask() or ','.join(current.get('endpoints') or [])
+            endpoints = [e.strip() for e in endpoints_str.split(',') if e.strip()]
+            endpoint_mode = questionary.select(
+                "Стратегия выбора endpoint:",
+                choices=["round-robin", "random"],
+                default=current.get('endpoint_mode') if current.get('endpoint_mode') in ["round-robin", "random"] else "round-robin",
+            ).ask() or current.get('endpoint_mode') or 'round-robin'
+            current['endpoint'] = None
+            current['endpoints'] = endpoints
+            current['endpoint_mode'] = endpoint_mode
+        else:
+            endpoint = questionary.text(
+                "Endpoint (например, http://localhost:9000):",
+                default=current.get('endpoint') or 'http://localhost:9000',
+            ).ask() or current.get('endpoint') or 'http://localhost:9000'
+            current['endpoint'] = endpoint
+            current['endpoints'] = []
+            current['endpoint_mode'] = None
 
-    if mode.startswith("Кластер"):
-        endpoints_str = questionary.text(
-            "Endpoints (через запятую):",
-            default=endpoints_default or "http://localhost:9000",
-        ).ask() or endpoints_default
-        endpoints = [e.strip() for e in endpoints_str.split(",") if e.strip()]
-        endpoint = None
-        endpoint_mode = questionary.select(
-            "Стратегия выбора endpoint:",
-            choices=["round-robin", "random"],
-            default=endpoint_mode_default if endpoint_mode_default in ["round-robin", "random"] else "round-robin",
-        ).ask() or endpoint_mode_default
-    else:
-        endpoint = questionary.text(
-            "Endpoint (например, http://localhost:9000):",
-            default=endpoint_default or "http://localhost:9000",
-        ).ask() or endpoint_default
-        # если один endpoint — список endpoints и режим очищаем
-        endpoints = []
-        endpoint_mode = None
+    def edit_text(key, prompt, default_value="", allow_empty=True):
+        value = current.get(key)
+        default = default_value if default_value != "" else (str(value) if value is not None else '')
+        answer = questionary.text(prompt, default=default).ask()
+        if answer is None:
+            return
+        if not allow_empty and answer.strip() == '':
+            return
+        current[key] = answer if answer != '' else None
 
-    # Бакет и базовые параметры
-    bucket = questionary.text(
-        "Bucket:",
-        default=data.get("bucket") or "",
-    ).ask() or data.get("bucket") or ""
+    def edit_int(key, prompt, default=0, min_value=1):
+        value = current.get(key)
+        default_str = str(value) if value is not None else str(default)
+        answer = questionary.text(
+            prompt,
+            default=default_str,
+            validate=lambda v: (v.isdigit() and int(v) >= min_value) or f"Введите целое число ≥ {min_value}",
+        ).ask()
+        if answer is None or answer.strip() == '':
+            return
+        current[key] = int(answer)
 
-    threads_str = questionary.text(
-        "Число потоков:",
-        default=str(data.get("threads") or 8),
-        validate=lambda v: (v.isdigit() and int(v) > 0) or "Введите целое число > 0",
-    ).ask()
-    threads_int = int(threads_str) if threads_str else (data.get("threads") or 8)
+    def edit_float(key, prompt, allow_empty=True, min_value=None):
+        value = current.get(key)
+        default_str = '' if (value is None and allow_empty) else str(value or '')
 
-    data_dir = questionary.text(
-        "Каталог датасета (data_dir):",
-        default=data.get("data_dir") or "./loadset/data",
-    ).ask() or data.get("data_dir") or "./loadset/data"
+        def validator(val):
+            if val.strip() == '' and allow_empty:
+                return True
+            try:
+                number = float(val)
+                if min_value is not None and number < min_value:
+                    return f"Введите число ≥ {min_value}"
+                return True
+            except ValueError:
+                return "Введите число"
 
-    infinite = questionary.confirm(
-        "Бесконечный режим (infinite):",
-        default=bool(data.get("infinite")),
-    ).ask()
+        answer = questionary.text(prompt, default=default_str, validate=validator).ask()
+        if answer is None:
+            return
+        if answer.strip() == '' and allow_empty:
+            current[key] = None
+        elif answer.strip() != '':
+            current[key] = float(answer)
 
-    mixed_read_ratio_default = data.get("mixed_read_ratio")
-    if mixed_read_ratio_default is None:
-        mixed_read_ratio_default = 0.7
-    mixed_ratio_str = questionary.text(
-        "mixed_read_ratio (0.0 - 1.0):",
-        default=str(mixed_read_ratio_default),
-        validate=lambda v: (
-            v.strip() == ""
-            or (v.replace(".", "", 1).isdigit() and 0.0 <= float(v) <= 1.0)
-            or "Введите число от 0.0 до 1.0 или оставьте пустым"
-        ),
-    ).ask() or str(mixed_read_ratio_default)
-    mixed_ratio = mixed_read_ratio_default if mixed_ratio_str.strip() == "" else float(mixed_ratio_str)
+    def edit_bool(key, prompt):
+        answer = questionary.confirm(prompt, default=bool(current.get(key))).ask()
+        if answer is not None:
+            current[key] = bool(answer)
 
-    unique_remote_names = questionary.confirm(
-        "unique_remote_names (уникальные имена объектов):",
-        default=bool(data.get("unique_remote_names")),
-    ).ask()
+    def edit_choice(key, prompt, choices):
+        default = current.get(key)
+        answer = questionary.select(
+            prompt,
+            choices=choices,
+            default=default if default in choices else choices[0],
+        ).ask()
+        if answer is not None:
+            current[key] = answer
 
-    # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
-    console.print("\n[bold]Настройки AWS CLI (опционально, переопределяют ~/.aws/config):[/bold]")
-    
-    # Функция для форматирования байтов в читаемый формат (MB или GB)
-    def _format_size_for_display(bytes_val: Union[int, str, None]) -> str:
-        if bytes_val is None:
-            return ""
-        if isinstance(bytes_val, str):
-            return bytes_val
-        # Конвертируем байты в MB или GB
-        mb = bytes_val / (1024 * 1024)
+    def edit_mixed_ratio():
+        default = current.get('mixed_read_ratio')
+        if default is None:
+            default = 0.7
+        answer = questionary.text(
+            "mixed_read_ratio (0.0 - 1.0):",
+            default=str(default),
+            validate=lambda v: (
+                v.strip() == ''
+                or (v.replace('.', '', 1).isdigit() and 0.0 <= float(v) <= 1.0)
+                or "Введите число от 0.0 до 1.0 или оставьте пустым"
+            ),
+        ).ask()
+        if answer is None:
+            return
+        if answer.strip() == '':
+            current['mixed_read_ratio'] = default
+        else:
+            current['mixed_read_ratio'] = float(answer)
+
+    def format_size_for_display(val):
+        if val is None:
+            return ''
+        if isinstance(val, str):
+            return val
+        mb = val / (1024 * 1024)
         if mb >= 1024:
             return f"{mb / 1024:.1f}GB"
         return f"{int(mb)}MB"
-    
-    multipart_threshold_val = data.get("aws_cli_multipart_threshold")
-    multipart_threshold_display = _format_size_for_display(multipart_threshold_val)
-    multipart_threshold_str = questionary.text(
-        "aws_cli_multipart_threshold (порог для multipart, MB или строка типа '5GB', '8MB'):",
-        default=multipart_threshold_display,
-        validate=lambda v: (
-            v.strip() == "" or validate_size_format(v)
-        ) or "Введите размер в формате MB (например, 5120) или строку типа '5GB', '8MB', или оставьте пустым",
-    ).ask() or ""
-    aws_cli_multipart_threshold = multipart_threshold_str.strip() if multipart_threshold_str.strip() else None
 
-    multipart_chunksize_val = data.get("aws_cli_multipart_chunksize")
-    multipart_chunksize_display = _format_size_for_display(multipart_chunksize_val)
-    multipart_chunksize_str = questionary.text(
-        "aws_cli_multipart_chunksize (размер чанка, MB или строка типа '8MB', '16MB'):",
-        default=multipart_chunksize_display,
-        validate=lambda v: (
-            v.strip() == "" or validate_size_format(v)
-        ) or "Введите размер в формате MB (например, 8) или строку типа '8MB', '16MB', или оставьте пустым",
-    ).ask() or ""
-    aws_cli_multipart_chunksize = multipart_chunksize_str.strip() if multipart_chunksize_str.strip() else None
-
-    max_concurrent_val = data.get("aws_cli_max_concurrent_requests")
-    max_concurrent_str = questionary.text(
-        "aws_cli_max_concurrent_requests (макс. параллельных запросов, например 10):",
-        default=str(max_concurrent_val) if max_concurrent_val is not None else "",
-        validate=lambda v: (
-            v.strip() == "" or (v.isdigit() and int(v) > 0)
-        ) or "Введите целое число > 0 или оставьте пустым",
-    ).ask() or ""
-    aws_cli_max_concurrent_requests = int(max_concurrent_str) if max_concurrent_str.strip() else None
-
-    # Паттерн нагрузки
-    pattern_default = data.get("pattern") or "sustained"
-    pattern = questionary.select(
-        "Паттерн нагрузки (pattern):",
-        choices=["sustained", "bursty"],
-        default=pattern_default if pattern_default in ["sustained", "bursty"] else "sustained",
-    ).ask() or pattern_default
-
-    burst_duration_val = data.get("burst_duration_sec")
-    burst_intensity_val = data.get("burst_intensity_multiplier")
-
-    if pattern == "bursty":
-        # Длительность всплеска
-        burst_duration_str = questionary.text(
-            "burst_duration_sec (длительность всплеска, сек):",
-            default=str(burst_duration_val if burst_duration_val is not None else 60.0),
-            validate=lambda v: (
-                v.replace(".", "", 1).isdigit() and float(v) > 0.0
-            ) or "Введите число > 0",
+    def edit_size_field(key, prompt):
+        default = format_size_for_display(current.get(key))
+        answer = questionary.text(
+            prompt,
+            default=default,
+            validate=lambda v: (v.strip() == '' or validate_size_format(v)) or "Введите значение в формате MB (5120) или строку вида '5GB'",
         ).ask()
-        burst_duration_sec = float(burst_duration_str) if burst_duration_str else (burst_duration_val or 60.0)
+        if answer is None:
+            return
+        current[key] = answer.strip() if answer.strip() else None
 
-        # Множитель интенсивности
-        burst_intensity_str = questionary.text(
-            "burst_intensity_multiplier (множитель интенсивности):",
-            default=str(burst_intensity_val if burst_intensity_val is not None else 5.0),
-            validate=lambda v: (
-                v.replace(".", "", 1).isdigit() and float(v) > 1.0
-            ) or "Введите число > 1.0",
+    def edit_endpoints_raw():
+        default = ','.join(current.get('endpoints') or [])
+        answer = questionary.text(
+            "Endpoints (через запятую):",
+            default=default,
         ).ask()
-        burst_intensity_multiplier = (
-            float(burst_intensity_str) if burst_intensity_str else (burst_intensity_val or 5.0)
-        )
-    else:
-        # Для sustained не трогаем существующие значения (если были заданы в конфиге)
-        burst_duration_sec = burst_duration_val
-        burst_intensity_multiplier = burst_intensity_val
+        if answer is None:
+            return
+        endpoints = [e.strip() for e in (answer or '').split(',') if e.strip()]
+        current['endpoints'] = endpoints
+        if endpoints:
+            current['endpoint'] = None
+            if current.get('endpoint_mode') not in ['round-robin', 'random']:
+                current['endpoint_mode'] = 'round-robin'
 
-    # Обновляем структуру (профиль нагрузки из конфига игнорируем, он выбирается при запуске)
-    updated = dict(data)
-    updated.pop("profile", None)
-    updated["bucket"] = bucket
-    updated["threads"] = threads_int
-    updated["data_dir"] = data_dir
-    updated["infinite"] = bool(infinite)
-    updated["mixed_read_ratio"] = mixed_ratio
-    updated["unique_remote_names"] = bool(unique_remote_names)
-    updated["pattern"] = pattern
-    updated["burst_duration_sec"] = burst_duration_sec
-    updated["burst_intensity_multiplier"] = burst_intensity_multiplier
-    if aws_cli_multipart_threshold is not None:
-        updated["aws_cli_multipart_threshold"] = aws_cli_multipart_threshold
-    else:
-        updated.pop("aws_cli_multipart_threshold", None)
-    if aws_cli_multipart_chunksize is not None:
-        updated["aws_cli_multipart_chunksize"] = aws_cli_multipart_chunksize
-    else:
-        updated.pop("aws_cli_multipart_chunksize", None)
-    if aws_cli_max_concurrent_requests is not None:
-        updated["aws_cli_max_concurrent_requests"] = aws_cli_max_concurrent_requests
-    else:
-        updated.pop("aws_cli_max_concurrent_requests", None)
+    def edit_endpoint_mode():
+        answer = questionary.select(
+            "Стратегия выбора endpoint:",
+            choices=["round-robin", "random"],
+            default=current.get('endpoint_mode') if current.get('endpoint_mode') in ['round-robin', 'random'] else 'round-robin',
+        ).ask()
+        if answer is not None:
+            current['endpoint_mode'] = answer
 
-    if endpoint:
-        updated["endpoint"] = endpoint
-        updated["endpoints"] = None
-        updated["endpoint_mode"] = None
-    else:
-        updated["endpoint"] = None
-        updated["endpoints"] = endpoints
-        updated["endpoint_mode"] = endpoint_mode
+    def edit_endpoint_text():
+        answer = questionary.text(
+            "Endpoint (например, http://localhost:9000):",
+            default=current.get('endpoint') or '',
+        ).ask()
+        if answer is None:
+            return
+        endpoint = answer.strip()
+        current['endpoint'] = endpoint or None
+        if endpoint:
+            current['endpoints'] = []
+            current['endpoint_mode'] = None
 
-    # Итоговая сводка
-    console.print("\n[bold]Обновлённые параметры:[/bold]")
-    table = Table(show_header=False, box=None)
-    table.add_column(style="cyan")
-    table.add_column(style="white")
-    table.add_row("bucket", str(updated.get("bucket")))
-    table.add_row("endpoint", str(updated.get("endpoint") or ""))
-    table.add_row("endpoints", ", ".join(updated.get("endpoints") or []))
-    table.add_row("endpoint_mode", str(updated.get("endpoint_mode") or ""))
-    table.add_row("threads", str(updated.get("threads")))
-    table.add_row("data_dir", str(updated.get("data_dir")))
-    table.add_row("infinite", str(updated.get("infinite")))
-    table.add_row("mixed_read_ratio", str(updated.get("mixed_read_ratio")))
-    table.add_row("unique_remote_names", str(updated.get("unique_remote_names")))
-    table.add_row("pattern", str(updated.get("pattern")))
-    table.add_row("burst_duration_sec", str(updated.get("burst_duration_sec")))
-    table.add_row("burst_intensity_multiplier", str(updated.get("burst_intensity_multiplier")))
-    if updated.get("aws_cli_multipart_threshold") is not None:
-        table.add_row("aws_cli_multipart_threshold", str(updated.get("aws_cli_multipart_threshold")))
-    if updated.get("aws_cli_multipart_chunksize") is not None:
-        table.add_row("aws_cli_multipart_chunksize", str(updated.get("aws_cli_multipart_chunksize")))
-    if updated.get("aws_cli_max_concurrent_requests") is not None:
-        table.add_row("aws_cli_max_concurrent_requests", str(updated.get("aws_cli_max_concurrent_requests")))
-    console.print(table)
+    field_handlers = {
+        "connection": edit_connection,
+        "bucket": lambda: edit_text("bucket", "Bucket:", default_value=current.get('bucket') or ""),
+        "endpoint": edit_endpoint_text,
+        "endpoints": edit_endpoints_raw,
+        "endpoint_mode": edit_endpoint_mode,
+        "threads": lambda: edit_int("threads", "Число потоков:", default=current.get('threads') or 8),
+        "data_dir": lambda: edit_text("data_dir", "Каталог датасета (data_dir):", default_value=current.get('data_dir') or './loadset/data'),
+        "report": lambda: edit_text("report", "Имя файла отчёта (JSON):", default_value=current.get('report') or 'report.json'),
+        "metrics": lambda: edit_text("metrics", "Имя файла метрик (CSV):", default_value=current.get('metrics') or 'metrics.csv'),
+        "infinite": lambda: edit_bool("infinite", "Бесконечный режим (infinite):"),
+        "mixed_read_ratio": edit_mixed_ratio,
+        "unique_remote_names": lambda: edit_bool("unique_remote_names", "unique_remote_names (уникальные имена объектов):"),
+        "pattern": lambda: edit_choice("pattern", "Паттерн нагрузки:", ["sustained", "bursty"]),
+        "burst_duration_sec": lambda: edit_float("burst_duration_sec", "burst_duration_sec (сек):", allow_empty=True, min_value=0.0),
+        "burst_intensity_multiplier": lambda: edit_float("burst_intensity_multiplier", "burst_intensity_multiplier:", allow_empty=True, min_value=1.0),
+        "order": lambda: edit_choice("order", "Порядок обработки файлов (order):", ["sequential", "random"]),
+        "aws_cli_multipart_threshold": lambda: edit_size_field("aws_cli_multipart_threshold", "aws_cli_multipart_threshold (MB или '5GB'):"),
+        "aws_cli_multipart_chunksize": lambda: edit_size_field("aws_cli_multipart_chunksize", "aws_cli_multipart_chunksize (MB или '8MB'):"),
+        "aws_cli_max_concurrent_requests": lambda: edit_int("aws_cli_max_concurrent_requests", "aws_cli_max_concurrent_requests:", default=current.get('aws_cli_max_concurrent_requests') or 10, min_value=1),
+    }
 
-    if not questionary.confirm("\nСохранить изменения в этом конфиге?", default=True).ask():
-        console.print("[yellow]Изменения отменены.[/yellow]")
-        return
+    field_order = [
+        ("connection", "Режим подключения"),
+        ("bucket", "bucket"),
+        ("endpoint", "endpoint"),
+        ("endpoints", "endpoints"),
+        ("endpoint_mode", "endpoint_mode"),
+        ("threads", "threads"),
+        ("data_dir", "data_dir"),
+        ("report", "report"),
+        ("metrics", "metrics"),
+        ("infinite", "infinite"),
+        ("mixed_read_ratio", "mixed_read_ratio"),
+        ("unique_remote_names", "unique_remote_names"),
+        ("pattern", "pattern"),
+        ("burst_duration_sec", "burst_duration_sec"),
+        ("burst_intensity_multiplier", "burst_intensity_multiplier"),
+        ("order", "order"),
+        ("aws_cli_multipart_threshold", "aws_cli_multipart_threshold"),
+        ("aws_cli_multipart_chunksize", "aws_cli_multipart_chunksize"),
+        ("aws_cli_max_concurrent_requests", "aws_cli_max_concurrent_requests"),
+    ]
+
+    while True:
+        console.clear()
+        console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
+        console.print(f"[bold]Файл:[/bold] [cyan]{cfg_path}[/cyan]\n")
+
+        summary = Table(show_header=False, box=None)
+        summary.add_column(style="cyan")
+        summary.add_column(style="white")
+        row_texts = {}
+        for key, label in field_order:
+            if key == 'connection':
+                if current.get('endpoint'):
+                    value = f"Один endpoint ({current['endpoint']})"
+                elif current.get('endpoints'):
+                    value = f"Кластер ({len(current['endpoints'])} endpoint)"
+                else:
+                    value = '—'
+            else:
+                value = format_value(current.get(key))
+            summary.add_row(label, value)
+            row_texts[key] = value
+        console.print(summary)
+
+        choices = [
+            questionary.Choice(title=f"{label}: {row_texts[key]}", value=key)
+            for key, label in field_order
+        ]
+        choices.append(questionary.Choice(title="Сохранить изменения", value="save"))
+        choices.append(questionary.Choice(title="Отмена", value="cancel"))
+
+        selection = questionary.select(
+            "Выберите параметр для изменения:",
+            choices=choices,
+            use_indicator=False,
+        ).ask()
+
+        if not selection or selection == 'cancel':
+            console.print("[yellow]Изменения отменены.[/yellow]")
+            questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+            return
+        if selection == 'save':
+            break
+        handler = field_handlers.get(selection)
+        if handler:
+            handler()
+
+    updated = dict(current)
+    updated.pop('profile', None)
+    updated['endpoints'] = ensure_list(updated.get('endpoints'))
 
     try:
-        out = {"run": {k: v for k, v in updated.items() if v is not None}}
-        with open(cfg_path, "w", encoding="utf-8") as f:
+        out = {'run': {k: v for k, v in updated.items() if v is not None}}
+        with open(cfg_path, 'w', encoding='utf-8') as f:
             yaml.safe_dump(out, f, sort_keys=False, allow_unicode=True)
         console.print(f"[bold green]✅ Конфиг обновлён: {cfg_path}[/bold green]")
-    except Exception as e:
-        console.print(f"[bold red]Ошибка при сохранении конфига: {e}[/bold red]")
+    except Exception as exc:
+        console.print(f"[bold red]Ошибка при сохранении конфига: {exc}[/bold red]")
 
     questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
-
 
 def validate_config_menu():
     """Меню проверки конфига: базовая валидация и работа с бакетом."""

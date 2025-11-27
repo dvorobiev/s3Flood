@@ -471,85 +471,6 @@ class Metrics:
         return out
 
 
-def _cleanup_aws_profile_section(profile_name: str):
-    """
-    Удаляет все секции профиля из ~/.aws/config, чтобы избежать дубликатов.
-    """
-    config_path = os.path.expanduser("~/.aws/config")
-    if not os.path.exists(config_path):
-        return
-    
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            lines = f.readlines()
-        
-        # Удаляем все секции [profile profile_name] и все их параметры до следующей секции
-        new_lines = []
-        skip_section = False
-        for line in lines:
-            # Проверяем начало секции профиля
-            if line.strip() == f"[profile {profile_name}]":
-                skip_section = True
-                continue
-            
-            # Если мы внутри секции профиля
-            if skip_section:
-                # Если встретили другую секцию (начинается с [), прекращаем пропуск
-                if line.strip().startswith('['):
-                    skip_section = False
-                    new_lines.append(line)
-                    continue
-                # Пропускаем все строки до следующей секции (включая пустые и с отступами)
-                # Параметры секции могут быть на разных уровнях вложенности
-                continue
-            
-            new_lines.append(line)
-        
-        # Записываем обновленный конфиг
-        with open(config_path, 'w', encoding='utf-8') as f:
-            f.writelines(new_lines)
-    except Exception:
-        # Если не удалось очистить, продолжаем - aws configure set может перезаписать
-        pass
-
-
-def _configure_aws_profile_multipart(
-    profile_name: str,
-    multipart_threshold: int | None = None,
-    multipart_chunksize: int | None = None,
-    max_concurrent_requests: int | None = None,
-):
-    """
-    Настраивает параметры multipart для указанного AWS CLI профиля.
-    Использует aws configure set для динамического обновления настроек.
-    Перед установкой очищает существующую секцию профиля, чтобы избежать дубликатов.
-    """
-    # Очищаем существующую секцию профиля перед созданием новой
-    _cleanup_aws_profile_section(profile_name)
-    
-    # Устанавливаем параметры через aws configure set
-    if multipart_threshold is not None:
-        threshold_mb = int(multipart_threshold / (1024 * 1024))
-        subprocess.run(
-            ["aws", "configure", "set", "s3.multipart_threshold", f"{threshold_mb}MB", "--profile", profile_name],
-            capture_output=True,
-            timeout=5
-        )
-    if multipart_chunksize is not None:
-        chunksize_mb = int(multipart_chunksize / (1024 * 1024))
-        subprocess.run(
-            ["aws", "configure", "set", "s3.multipart_chunksize", f"{chunksize_mb}MB", "--profile", profile_name],
-            capture_output=True,
-            timeout=5
-        )
-    if max_concurrent_requests is not None:
-        subprocess.run(
-            ["aws", "configure", "set", "s3.max_concurrent_requests", str(max_concurrent_requests), "--profile", profile_name],
-            capture_output=True,
-            timeout=5
-        )
-
-
 def _get_aws_env(
     access_key: str | None,
     secret_key: str | None,
@@ -568,77 +489,43 @@ def _get_aws_env(
     # (начиная с boto3 1.36.0 checksums включены по умолчанию, что может вызывать BadDigest)
     env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
     
-    # Определяем профиль для использования
-    # Если нужно переопределить multipart настройки, используем отдельный профиль s3flood
-    # и динамически обновляем его настройки
+    def _size_to_cli(value: int) -> str:
+        gb = 1024 * 1024 * 1024
+        mb = 1024 * 1024
+        if value % gb == 0:
+            return f"{value // gb}GB"
+        if value % mb == 0:
+            return f"{value // mb}MB"
+        return f"{value}B"
+
+    transfer_cfg: dict[str, object] = {}
+    if multipart_threshold is not None:
+        transfer_cfg["multipart_threshold"] = _size_to_cli(multipart_threshold)
+    if multipart_chunksize is not None:
+        transfer_cfg["multipart_chunksize"] = _size_to_cli(multipart_chunksize)
+    if max_concurrent_requests is not None:
+        transfer_cfg["max_concurrent_requests"] = max_concurrent_requests
+
+    if transfer_cfg:
+        env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_cfg)
+    else:
+        env.pop("AWS_CLI_FILE_TRANSFER_CONFIG", None)
+
     profile_to_use = None
-    if multipart_threshold is not None or multipart_chunksize is not None or max_concurrent_requests is not None:
-        # Используем отдельный профиль s3flood для наших настроек
-        profile_to_use = "s3flood"
-        # Настраиваем параметры multipart для этого профиля
-        _configure_aws_profile_multipart(
-            profile_to_use,
-            multipart_threshold,
-            multipart_chunksize,
-            max_concurrent_requests
-        )
-        # Если у пользователя есть aws_profile, копируем credentials из него
-        if aws_profile:
-            # Копируем credentials из исходного профиля в s3flood
-            # (если они не заданы явно через access_key/secret_key)
-            if not (access_key and secret_key):
-                # Получаем credentials из исходного профиля
-                try:
-                    result = subprocess.run(
-                        ["aws", "configure", "get", "aws_access_key_id", "--profile", aws_profile],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        access_key = result.stdout.strip()
-                    result = subprocess.run(
-                        ["aws", "configure", "get", "aws_secret_access_key", "--profile", aws_profile],
-                        capture_output=True,
-                        text=True,
-                        timeout=5
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        secret_key = result.stdout.strip()
-                except Exception:
-                    pass
-    elif aws_profile:
-        # Если multipart настройки не заданы, используем исходный профиль
+    if aws_profile:
         profile_to_use = aws_profile
-    
-    if profile_to_use:
-        env["AWS_PROFILE"] = profile_to_use
+        env["AWS_PROFILE"] = aws_profile
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
     elif access_key and secret_key:
         env["AWS_ACCESS_KEY_ID"] = access_key
         env["AWS_SECRET_ACCESS_KEY"] = secret_key
+        env.pop("AWS_PROFILE", None)
     else:
         env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
-    
-    # Если заданы credentials явно и используется профиль s3flood, настраиваем их
-    if profile_to_use == "s3flood" and access_key and secret_key:
-        try:
-            subprocess.run(
-                ["aws", "configure", "set", "aws_access_key_id", access_key, "--profile", "s3flood"],
-                capture_output=True,
-                timeout=5
-            )
-            subprocess.run(
-                ["aws", "configure", "set", "aws_secret_access_key", secret_key, "--profile", "s3flood"],
-                capture_output=True,
-                timeout=5
-            )
-        except Exception:
-            pass
-    
+
     return env, profile_to_use
 
 
