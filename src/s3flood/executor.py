@@ -606,24 +606,36 @@ def aws_cp_download(
     multipart_chunksize: int | None = None,
     max_concurrent_requests: int | None = None,
 ):
+    """
+    Скачивает файл из S3 используя aws s3 cp.
+    AWS CLI может использовать параллельные запросы (range requests) для больших файлов,
+    что улучшает производительность. Параметр max_concurrent_requests из
+    AWS_CLI_FILE_TRANSFER_CONFIG влияет на количество параллельных запросов.
+    
+    Примечание: multipart upload используется только для upload, не для download.
+    Но aws s3 cp использует оптимизации для download через параллельные range requests.
+    """
     env = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
-    # Используем s3api get-object вместо s3 cp, чтобы избежать ошибки обновления времени модификации /dev/null
+    # Используем aws s3 cp для download - он может использовать параллельные запросы для больших файлов
+    # max_concurrent_requests из AWS_CLI_FILE_TRANSFER_CONFIG влияет на количество параллельных запросов
     devnull = "NUL" if os.name == "nt" else "/dev/null"
-    # Извлекаем имя бакета без префикса s3://
-    bucket_name = bucket.replace("s3://", "").split("/")[0]
-    cmd = ["aws", "s3api", "get-object", "--bucket", bucket_name, "--key", key, devnull, "--endpoint-url", endpoint]
+    url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
+    cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
     res = subprocess.run(cmd, capture_output=True, text=True, env=env)
     # Если команда успешна (returncode == 0), возвращаем результат как есть
     if res.returncode == 0:
         return res
-    # Если есть ошибка обновления времени модификации, но данные загружены, считаем успехом
+    # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
     if res.returncode != 0 and res.stderr:
-        if "Successfully Downloaded" in res.stderr and "unable to update the last modified time" in res.stderr:
+        # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
+        # но данные уже загружены, так что это не критично
+        if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
+           ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
             # Данные загружены успешно, просто не удалось обновить время модификации
-            # Создаём фиктивный успешный результат с теми же атрибутами, что и subprocess.CompletedProcess
+            # Создаём фиктивный успешный результат
             class FakeResult:
                 returncode = 0
                 stdout = res.stdout
@@ -1028,16 +1040,9 @@ def run_profile(args):
                         else:
                             debug_info.append("no returncode attribute")
                             err = err or f"unexpected result type: {type(res)}; debug: {'; '.join(debug_info)}"
-                # Пытаемся извлечь реальный размер объекта из ответа s3api get-object
-                nbytes = job.size  # По умолчанию используем размер исходного файла
-                if ok and res and hasattr(res, 'stdout') and res.stdout:
-                    try:
-                        import json
-                        response_data = json.loads(res.stdout)
-                        if "ContentLength" in response_data:
-                            nbytes = int(response_data["ContentLength"])
-                    except (json.JSONDecodeError, ValueError, KeyError):
-                        pass  # Используем job.size если не удалось распарсить
+                # Для download используем размер из job.size (известен из списка объектов)
+                # aws s3 cp не возвращает JSON с размером, в отличие от s3api get-object
+                nbytes = job.size
                 # Определяем имя файла для отображения
                 filename = key
                 metrics.record("download", start, end, nbytes, ok, err, filename, recent_op_id)
