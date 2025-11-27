@@ -3,10 +3,12 @@ from __future__ import annotations
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+
+from .dataset import parse_size
 
 
 class RunConfigModel(BaseModel):
@@ -57,6 +59,11 @@ class RunConfigModel(BaseModel):
     # Порядок обработки файлов
     order: Optional[str] = None  # sequential | random
     unique_remote_names: Optional[bool] = None
+    # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
+    # Принимаем строки типа "5GB", "8MB" или числа (интерпретируются как MB)
+    aws_cli_multipart_threshold: Optional[Union[str, int]] = Field(default=None)  # порог для multipart (MB или строка типа "5GB")
+    aws_cli_multipart_chunksize: Optional[Union[str, int]] = Field(default=None)  # размер чанка (MB или строка типа "8MB")
+    aws_cli_max_concurrent_requests: Optional[int] = Field(default=None, gt=0)  # максимальное количество параллельных запросов
 
 
 @dataclass
@@ -84,6 +91,9 @@ class RunSettings:
     retry_backoff_base: Optional[float]
     order: Optional[str]
     unique_remote_names: bool
+    aws_cli_multipart_threshold: Optional[int]
+    aws_cli_multipart_chunksize: Optional[int]
+    aws_cli_max_concurrent_requests: Optional[int]
 
     def to_namespace(self) -> Namespace:
         return Namespace(**asdict(self))
@@ -155,7 +165,10 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
 
     # Параметры для mixed профиля (по умолчанию 70% чтения, 30% записи)
     mixed_read_ratio = pick("mixed_read_ratio")
-    if profile == "mixed-70-30" and mixed_read_ratio is None:
+    # Поддерживаем старое имя профиля mixed-70-30 для обратной совместимости
+    if profile == "mixed-70-30":
+        profile = "mixed"
+    if profile == "mixed" and mixed_read_ratio is None:
         mixed_read_ratio = 0.7
 
     # Паттерны нагрузки
@@ -172,6 +185,34 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     
     # Порядок обработки файлов
     order = pick("order", default="sequential")
+    
+    # Настройки AWS CLI (переопределяют настройки из ~/.aws/config через переменные окружения)
+    # Конвертируем строки/числа в байты
+    def _parse_size_to_bytes(value: Union[str, int, None]) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            s = value.strip().lower()
+            # Если строка заканчивается на единицу измерения (kb, mb, gb) - парсим как есть
+            if any(s.endswith(u) for u in ["kb", "mb", "gb", "tb"]):
+                return parse_size(value)
+            # Если строка - просто число без единиц, интерпретируем как MB
+            try:
+                num = float(s)
+                return int(num * 1024 * 1024)
+            except ValueError:
+                # Если не число и не единица - пробуем parse_size (может быть просто число как строка)
+                return parse_size(value)
+        # Если число - интерпретируем как MB
+        return int(value * 1024 * 1024)
+    
+    aws_cli_multipart_threshold_raw = pick("aws_cli_multipart_threshold")
+    aws_cli_multipart_threshold = _parse_size_to_bytes(aws_cli_multipart_threshold_raw)
+    
+    aws_cli_multipart_chunksize_raw = pick("aws_cli_multipart_chunksize")
+    aws_cli_multipart_chunksize = _parse_size_to_bytes(aws_cli_multipart_chunksize_raw)
+    
+    aws_cli_max_concurrent_requests = pick("aws_cli_max_concurrent_requests")
 
     return RunSettings(
         profile=profile,
@@ -197,5 +238,8 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         retry_backoff_base=retry_backoff_base,
         order=order,
         unique_remote_names=unique_remote_names,
+        aws_cli_multipart_threshold=aws_cli_multipart_threshold,
+        aws_cli_multipart_chunksize=aws_cli_multipart_chunksize,
+        aws_cli_max_concurrent_requests=aws_cli_max_concurrent_requests,
     )
 

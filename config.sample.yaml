@@ -1,13 +1,13 @@
 # Пример конфига запуска s3flood. Скопируйте в config.local.yaml и подставьте свои значения.
 run:
-  profile: write
+  profile: write  # профиль по умолчанию; при запуске можно переопределить через CLI или меню (write/read/mixed)
   client: awscli
   # Один endpoint...
-  endpoint: "http://127.0.0.1:9000"
+  endpoint: "http://127.0.0.1:9080"
   # ...или кластерный режим (см. endpoint_mode: round-robin|random)
   # endpoints:
-  #   - "http://127.0.0.1:9000"
-  #   - "http://127.0.0.2:9000"
+  #   - "http://127.0.0.1:9080"
+  #   - "http://127.0.0.2:9080"
   # endpoint_mode: round-robin
   bucket: "your-bucket-name"
   # Варианты аутентификации:
@@ -22,7 +22,7 @@ run:
   metrics: "out.csv"
   # infinite: false  # Бесконечный режим: после завершения всех файлов начинать заново
   # Параметры для mixed профиля
-  # mixed_read_ratio: 0.7  # Доля операций чтения (0.0-1.0), по умолчанию 0.7 для mixed-70-30
+  # mixed_read_ratio: 0.7  # Доля операций чтения (0.0-1.0), по умолчанию 0.7 для mixed
   # Паттерны нагрузки
   # pattern: sustained  # sustained | bursty
   # burst_duration_sec: 10.0  # Длительность всплеска в секундах для bursty
@@ -35,4 +35,9 @@ run:
   order: random  # sequential (сначала маленькие) или random (случайный порядок)
   # Уникальные имена объектов в бакете (добавляет постфикс и не перезаписывает предыдущие файлы)
   unique_remote_names: false
+  # Настройки AWS CLI (переопределяют настройки из ~/.aws/config через переменные окружения)
+  # Значения можно задавать в MB (число) или строками типа "5GB", "8MB"
+  # aws_cli_multipart_threshold: 5120  # Порог для multipart upload в MB (по умолчанию 5GB, можно указать "5GB")
+  # aws_cli_multipart_chunksize: 8  # Размер чанка для multipart в MB (по умолчанию 8MB, можно указать "8MB")
+  # aws_cli_max_concurrent_requests: 10  # Максимальное количество параллельных запросов
 

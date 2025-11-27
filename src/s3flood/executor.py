@@ -28,6 +28,13 @@ ANSI_MAGENTA = "\x1b[35m" if USE_COLORS else ""
 ANSI_CYAN = "\x1b[36m" if USE_COLORS else ""
 
 ANSI_REGEX = re.compile(r"\x1b\[[0-9;]*m")
+CONFIG_HOME = Path.home()
+CUSTOM_AWS_PROFILE = "s3flood-temp"
+CUSTOM_AWS_CONFIG_PATH = Path(
+    os.environ.get("S3FLOOD_CUSTOM_AWS_CONFIG") or (CONFIG_HOME / ".aws" / "s3flood-config")
+).expanduser()
+_custom_config_signature: tuple | None = None
+_custom_config_lock = threading.Lock()
 
 WRITE_ICON = "↑"
 READ_ICON = "↓"
@@ -113,6 +120,64 @@ def make_remote_key(filename: str, unique: bool) -> str:
     if ext:
         return f"{stem}.{suffix}{ext}"
     return f"{stem}.{suffix}"
+
+
+def _format_cli_size(value: int) -> str:
+    """Преобразует размер в строку формата AWS CLI (MB/GB)."""
+    gb = 1024 * 1024 * 1024
+    mb = 1024 * 1024
+    if value % gb == 0:
+        return f"{value // gb}GB"
+    if value % mb == 0:
+        return f"{value // mb}MB"
+    return f"{value}B"
+
+
+def _ensure_custom_aws_config(
+    source_profile: str | None,
+    s3_settings: dict[str, str],
+    access_key: str | None,
+    secret_key: str | None,
+) -> Path:
+    """
+    Создаёт отдельный AWS config с нужными параметрами S3 и (опционально) source_profile.
+    """
+    global _custom_config_signature
+    region = os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("AWS_REGION")
+    signature = (
+        tuple(sorted(s3_settings.items())),
+        source_profile,
+        region,
+        access_key,
+        secret_key,
+    )
+    with _custom_config_lock:
+        if _custom_config_signature == signature and CUSTOM_AWS_CONFIG_PATH.exists():
+            return CUSTOM_AWS_CONFIG_PATH
+
+        block_lines = [f"[profile {CUSTOM_AWS_PROFILE}]"]
+        if source_profile:
+            block_lines.append(f"source_profile = {source_profile}")
+        if region:
+            block_lines.append(f"region = {region}")
+        if s3_settings:
+            block_lines.append("s3 =")
+            for key, value in s3_settings.items():
+                block_lines.append(f"    {key} = {value}")
+        if access_key and secret_key:
+            block_lines.append(f"aws_access_key_id = {access_key}")
+            block_lines.append(f"aws_secret_access_key = {secret_key}")
+
+        config_content = "\n".join(block_lines).strip() + "\n"
+        CUSTOM_AWS_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CUSTOM_AWS_CONFIG_PATH, "w", encoding="utf-8") as cfg:
+            cfg.write(config_content)
+        try:
+            os.chmod(CUSTOM_AWS_CONFIG_PATH, 0o600)
+        except OSError:
+            pass
+        _custom_config_signature = signature
+        return CUSTOM_AWS_CONFIG_PATH
 
 
 class Metrics:
@@ -471,26 +536,49 @@ class Metrics:
         return out
 
 
-def _get_aws_env(access_key: str | None, secret_key: str | None, aws_profile: str | None) -> dict:
+def _get_aws_env(
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
+) -> tuple[dict, str | None]:
+    """
+    Возвращает (env, profile_name) для запуска AWS CLI.
+    profile_name — имя профиля, который нужно передать в aws ... --profile.
+    """
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
     # Отключаем автоматические checksums для совместимости с S3-совместимыми бекендами
     # (начиная с boto3 1.36.0 checksums включены по умолчанию, что может вызывать BadDigest)
     env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
-    # Устанавливаем высокий порог multipart, чтобы избежать multipart upload для большинства файлов
-    env["AWS_CLI_FILE_TRANSFER_CONFIG"] = '{"multipart_threshold": 5368709120}'
-    if aws_profile:
-        env["AWS_PROFILE"] = aws_profile
-        env.pop("AWS_ACCESS_KEY_ID", None)
-        env.pop("AWS_SECRET_ACCESS_KEY", None)
-    elif access_key and secret_key:
+
+    s3_settings: dict[str, str] = {}
+    if multipart_threshold is not None:
+        s3_settings["multipart_threshold"] = _format_cli_size(multipart_threshold)
+    if multipart_chunksize is not None:
+        s3_settings["multipart_chunksize"] = _format_cli_size(multipart_chunksize)
+    if max_concurrent_requests is not None:
+        s3_settings["max_concurrent_requests"] = str(max_concurrent_requests)
+
+    custom_path = _ensure_custom_aws_config(aws_profile, s3_settings, access_key, secret_key)
+    env["AWS_CONFIG_FILE"] = str(custom_path)
+    profile_to_use: str | None = CUSTOM_AWS_PROFILE
+
+    if access_key and secret_key:
         env["AWS_ACCESS_KEY_ID"] = access_key
         env["AWS_SECRET_ACCESS_KEY"] = secret_key
     else:
-        env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
-    return env
+
+    env["AWS_PROFILE"] = profile_to_use
+
+    # Больше не используем AWS_CLI_FILE_TRANSFER_CONFIG
+    env.pop("AWS_CLI_FILE_TRANSFER_CONFIG", None)
+
+    return env, profile_to_use
 
 
 def aws_cp_upload(
@@ -501,21 +589,25 @@ def aws_cp_upload(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
-    env = _get_aws_env(access_key, secret_key, aws_profile)
-    try:
-        size_bytes = local.stat().st_size
-    except OSError:
-        size_bytes = 0
-    single_put_limit = 5 * 1024 * 1024 * 1024  # 5 GB — предел одного put-object
-    # Для файлов < 5GB используем s3api put-object (гарантирует одиночный PUT без multipart и checksums)
-    if size_bytes and size_bytes < single_put_limit:
-        bucket_name = bucket.replace("s3://", "").split("/")[0]
-        cmd = ["aws", "s3api", "put-object", "--bucket", bucket_name, "--key", key, "--body", str(local), "--endpoint-url", endpoint]
-        return subprocess.run(cmd, capture_output=True, text=True, env=env)
-    # Для файлов >= 5GB используем s3 cp (с отключенными checksums через переменные окружения)
+    """
+    Загружает файл в S3 используя aws s3 cp.
+    AWS CLI автоматически определяет, использовать ли multipart upload на основе
+    multipart_threshold из переменной окружения AWS_CLI_FILE_TRANSFER_CONFIG.
+    """
+    env, profile_name = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
+    # Всегда используем aws s3 cp - он автоматически выберет multipart или обычный PUT
+    # на основе multipart_threshold из настроек профиля
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
     return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
@@ -525,11 +617,19 @@ def aws_list_objects(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
     """Получает список объектов из бакета через s3api list-objects-v2."""
-    env = _get_aws_env(access_key, secret_key, aws_profile)
+    env, profile_name = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket_name, "--endpoint-url", endpoint]
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
     res = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if res.returncode != 0:
         return None
@@ -547,6 +647,28 @@ def aws_list_objects(
         return None
 
 
+def aws_check_bucket_access(
+    bucket: str,
+    endpoint: str,
+    access_key: str | None,
+    secret_key: str | None,
+    aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
+):
+    """Быстрая проверка доступа к бакету через s3api head-bucket."""
+    env, profile_name = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
+    bucket_name = bucket.replace("s3://", "").split("/")[0]
+    cmd = ["aws", "s3api", "head-bucket", "--bucket", bucket_name, "--endpoint-url", endpoint]
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+
+
 def aws_cp_download(
     bucket: str,
     key: str,
@@ -554,22 +676,42 @@ def aws_cp_download(
     access_key: str | None,
     secret_key: str | None,
     aws_profile: str | None,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
 ):
-    env = _get_aws_env(access_key, secret_key, aws_profile)
-    # Используем s3api get-object вместо s3 cp, чтобы избежать ошибки обновления времени модификации /dev/null
+    """
+    Скачивает файл из S3 используя aws s3 cp.
+    AWS CLI может использовать параллельные запросы (range requests) для больших файлов,
+    что улучшает производительность. Параметр max_concurrent_requests из
+    AWS_CLI_FILE_TRANSFER_CONFIG влияет на количество параллельных запросов.
+    
+    Примечание: multipart upload используется только для upload, не для download.
+    Но aws s3 cp использует оптимизации для download через параллельные range requests.
+    """
+    env, profile_name = _get_aws_env(
+        access_key, secret_key, aws_profile,
+        multipart_threshold, multipart_chunksize, max_concurrent_requests
+    )
+    # Используем aws s3 cp для download - он может использовать параллельные запросы для больших файлов
+    # max_concurrent_requests из настроек профиля влияет на количество параллельных запросов
     devnull = "NUL" if os.name == "nt" else "/dev/null"
-    # Извлекаем имя бакета без префикса s3://
-    bucket_name = bucket.replace("s3://", "").split("/")[0]
-    cmd = ["aws", "s3api", "get-object", "--bucket", bucket_name, "--key", key, devnull, "--endpoint-url", endpoint]
+    url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
+    cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
     res = subprocess.run(cmd, capture_output=True, text=True, env=env)
     # Если команда успешна (returncode == 0), возвращаем результат как есть
     if res.returncode == 0:
         return res
-    # Если есть ошибка обновления времени модификации, но данные загружены, считаем успехом
+    # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
     if res.returncode != 0 and res.stderr:
-        if "Successfully Downloaded" in res.stderr and "unable to update the last modified time" in res.stderr:
+        # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
+        # но данные уже загружены, так что это не критично
+        if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
+           ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
             # Данные загружены успешно, просто не удалось обновить время модификации
-            # Создаём фиктивный успешный результат с теми же атрибутами, что и subprocess.CompletedProcess
+            # Создаём фиктивный успешный результат
             class FakeResult:
                 returncode = 0
                 stdout = res.stdout
@@ -642,6 +784,9 @@ def gather_files(root: Path):
 
 def run_profile(args):
     profile = getattr(args, "profile", "write")
+    # Поддерживаем старое имя профиля mixed-70-30 (обратная совместимость)
+    if profile == "mixed-70-30":
+        profile = "mixed"
     order = getattr(args, "order", "sequential")
     
     jobs: list[Job] = []
@@ -708,14 +853,16 @@ def run_profile(args):
         if not data_root.exists():
             print(f"Data dir not found: {data_root}")
             return
-        
+
         files = gather_files(data_root)
         if not files:
             print(f"No dataset files found under {data_root}")
             return
-        
+
         try:
             files.sort(key=lambda p: p.stat().st_size)
+            jobs: list[Job] = []
+            groups = {}
             total_files = len(files)
             total_bytes = 0
             for p in files:
@@ -786,7 +933,7 @@ def run_profile(args):
         # Для write профиля добавляем задачи на запись
         for job in jobs:
             q.put(("upload", job))
-    elif profile == "mixed-70-30":
+    elif profile == "mixed":
         # Для mixed профиля сначала загружаем данные
         for job in jobs:
             q.put(("upload", job))
@@ -825,7 +972,7 @@ def run_profile(args):
         nonlocal active_uploads, active_downloads, files_in_current_cycle, extra_thread_ids
         # Для bursty режима в mixed профиле: дополнительные потоки работают только во время всплеска
         current_thread_id = threading.get_ident()
-        is_extra_thread = current_thread_id in extra_thread_ids if pattern == "bursty" and profile == "mixed-70-30" else False
+        is_extra_thread = current_thread_id in extra_thread_ids if pattern == "bursty" and profile == "mixed" else False
         
         while not stop.is_set():
             # Для дополнительных потоков в bursty режиме: работаем только во время всплеска
@@ -841,7 +988,7 @@ def run_profile(args):
             except queue.Empty:
                 # Для write и read профилей: если очередь пуста, завершаем worker
                 # Для mixed профиля: если upload фаза завершена и очередь пуста, завершаем worker
-                if profile == "mixed-70-30":
+                if profile == "mixed":
                     if upload_phase_done.is_set() and q.empty():
                         break
                 else:
@@ -891,6 +1038,9 @@ def run_profile(args):
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
+                    getattr(args, "aws_cli_multipart_threshold", None),
+                    getattr(args, "aws_cli_multipart_chunksize", None),
+                    getattr(args, "aws_cli_max_concurrent_requests", None),
                 )
                 if not ok and res is None:
                     err = err or "retry failed"
@@ -933,6 +1083,9 @@ def run_profile(args):
                     getattr(args, "access_key", None),
                     getattr(args, "secret_key", None),
                     getattr(args, "aws_profile", None),
+                    getattr(args, "aws_cli_multipart_threshold", None),
+                    getattr(args, "aws_cli_multipart_chunksize", None),
+                    getattr(args, "aws_cli_max_concurrent_requests", None),
                 )
                 end = time.time()
                 # Детальная диагностика для отладки
@@ -963,16 +1116,9 @@ def run_profile(args):
                         else:
                             debug_info.append("no returncode attribute")
                             err = err or f"unexpected result type: {type(res)}; debug: {'; '.join(debug_info)}"
-                # Пытаемся извлечь реальный размер объекта из ответа s3api get-object
-                nbytes = job.size  # По умолчанию используем размер исходного файла
-                if ok and res and hasattr(res, 'stdout') and res.stdout:
-                    try:
-                        import json
-                        response_data = json.loads(res.stdout)
-                        if "ContentLength" in response_data:
-                            nbytes = int(response_data["ContentLength"])
-                    except (json.JSONDecodeError, ValueError, KeyError):
-                        pass  # Используем job.size если не удалось распарсить
+                # Для download используем размер из job.size (известен из списка объектов)
+                # aws s3 cp не возвращает JSON с размером, в отличие от s3api get-object
+                nbytes = job.size
                 # Определяем имя файла для отображения
                 filename = key
                 metrics.record("download", start, end, nbytes, ok, err, filename, recent_op_id)
@@ -987,7 +1133,7 @@ def run_profile(args):
     threads = []
     threads_lock = threading.Lock()
     max_threads = args.threads
-    if pattern == "bursty" and profile == "mixed-70-30":
+    if pattern == "bursty" and profile == "mixed":
         # Для bursty режима в mixed профиле создаем максимальное количество потоков
         max_threads = int(args.threads * burst_intensity_multiplier)
     
@@ -999,7 +1145,7 @@ def run_profile(args):
         threads.append(t)
     
     # Для bursty режима в mixed профиле создаем дополнительные потоки
-    if pattern == "bursty" and profile == "mixed-70-30":
+    if pattern == "bursty" and profile == "mixed":
         for _ in range(max_threads - base_threads):
             t = threading.Thread(target=worker, daemon=True)
             t.start()
@@ -1098,7 +1244,7 @@ def run_profile(args):
                         operations_pending = q.qsize()
                 
                 if operations_pending == 0 and operations_active == 0:
-                    if profile == "mixed-70-30":
+                    if profile == "mixed":
                         start_mixed_phase()
                     elif getattr(args, "infinite", False):
                         # Бесконечный режим: после завершения всех файлов начинаем новый цикл
@@ -1130,7 +1276,7 @@ def run_profile(args):
                                 last_cycle_restart = now
             
             # Для mixed профиля: добавляем новые задачи в смешанном режиме
-            if mixed_phase_started and profile == "mixed-70-30":
+            if mixed_phase_started and profile == "mixed":
                 with uploaded_objects_lock:
                     if uploaded_objects and q.qsize() < (queue_limit or 1000):
                         # Добавляем новые задачи в зависимости от паттерна
