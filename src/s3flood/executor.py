@@ -499,16 +499,11 @@ def _cleanup_aws_profile_section(profile_name: str):
                     skip_section = False
                     new_lines.append(line)
                     continue
-                # Пропускаем все строки с отступами (параметры секции) и пустые строки
+                # Пропускаем все строки до следующей секции (включая пустые и с отступами)
                 # Параметры секции могут быть на разных уровнях вложенности
-                stripped = line.lstrip()
-                if not stripped or line.startswith(' ') or line.startswith('\t'):
-                    continue
-                # Если встретили строку без отступа и не секцию - это ошибка формата, но прекращаем пропуск
-                skip_section = False
-                new_lines.append(line)
-            else:
-                new_lines.append(line)
+                continue
+            
+            new_lines.append(line)
         
         # Записываем обновленный конфиг
         with open(config_path, 'w', encoding='utf-8') as f:
