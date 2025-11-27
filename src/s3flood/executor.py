@@ -691,7 +691,7 @@ def aws_list_objects(
     cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket_name, "--endpoint-url", endpoint]
     if profile_name:
         cmd.extend(["--profile", profile_name])
-    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if res.returncode != 0:
         return None
     try:
