@@ -471,6 +471,38 @@ class Metrics:
         return out
 
 
+def _configure_aws_profile_multipart(
+    profile_name: str,
+    multipart_threshold: int | None = None,
+    multipart_chunksize: int | None = None,
+    max_concurrent_requests: int | None = None,
+):
+    """
+    Настраивает параметры multipart для указанного AWS CLI профиля.
+    Использует aws configure set для динамического обновления настроек.
+    """
+    if multipart_threshold is not None:
+        threshold_mb = int(multipart_threshold / (1024 * 1024))
+        subprocess.run(
+            ["aws", "configure", "set", "s3.multipart_threshold", f"{threshold_mb}MB", "--profile", profile_name],
+            capture_output=True,
+            timeout=5
+        )
+    if multipart_chunksize is not None:
+        chunksize_mb = int(multipart_chunksize / (1024 * 1024))
+        subprocess.run(
+            ["aws", "configure", "set", "s3.multipart_chunksize", f"{chunksize_mb}MB", "--profile", profile_name],
+            capture_output=True,
+            timeout=5
+        )
+    if max_concurrent_requests is not None:
+        subprocess.run(
+            ["aws", "configure", "set", "s3.max_concurrent_requests", str(max_concurrent_requests), "--profile", profile_name],
+            capture_output=True,
+            timeout=5
+        )
+
+
 def _get_aws_env(
     access_key: str | None,
     secret_key: str | None,
@@ -480,58 +512,60 @@ def _get_aws_env(
     max_concurrent_requests: int | None = None,
 ) -> tuple[dict, str | None]:
     """
-    Возвращает (env, temp_config_file).
-    temp_config_file - путь к временному конфиг-файлу, если нужно переопределить настройки multipart.
+    Возвращает (env, profile_name).
+    profile_name - имя AWS CLI профиля с настроенными параметрами multipart (или None).
     """
     env = os.environ.copy()
     env["AWS_EC2_METADATA_DISABLED"] = "true"
     # Отключаем автоматические checksums для совместимости с S3-совместимыми бекендами
     # (начиная с boto3 1.36.0 checksums включены по умолчанию, что может вызывать BadDigest)
     env["AWS_S3_DISABLE_REQUEST_CHECKSUM"] = "true"
-    # Формируем конфигурацию AWS CLI (переопределяет настройки из ~/.aws/config)
-    # Переменные окружения имеют приоритет над конфигом
-    # Устанавливаем переменную только если хотя бы один параметр задан
-    transfer_config = {}
-    if multipart_threshold is not None:
-        transfer_config["multipart_threshold"] = multipart_threshold
-    if multipart_chunksize is not None:
-        transfer_config["multipart_chunksize"] = multipart_chunksize
-    if max_concurrent_requests is not None:
-        transfer_config["max_concurrent_requests"] = max_concurrent_requests
     
-    # Создаем временный конфиг-файл для переопределения настроек multipart
-    # Это необходимо, так как переменные окружения не всегда переопределяют ~/.aws/config
-    temp_config_file = None
-    if transfer_config:
-        # Создаем временный конфиг-файл с настройками multipart
-        import tempfile
-        temp_fd, temp_config_file = tempfile.mkstemp(suffix='.ini', prefix='s3flood_config_', text=True)
-        try:
-            with os.fdopen(temp_fd, 'w') as f:
-                f.write('[default]\n')
-                f.write('s3 =\n')
-                if "multipart_threshold" in transfer_config:
-                    threshold_mb = transfer_config["multipart_threshold"] / (1024 * 1024)
-                    f.write(f'    multipart_threshold = {int(threshold_mb)}MB\n')
-                if "multipart_chunksize" in transfer_config:
-                    chunksize_mb = transfer_config["multipart_chunksize"] / (1024 * 1024)
-                    f.write(f'    multipart_chunksize = {int(chunksize_mb)}MB\n')
-                if "max_concurrent_requests" in transfer_config:
-                    f.write(f'    max_concurrent_requests = {transfer_config["max_concurrent_requests"]}\n')
-        except Exception:
-            # Если не удалось создать временный файл, удаляем его и продолжаем без переопределения
-            if temp_config_file:
+    # Определяем профиль для использования
+    # Если нужно переопределить multipart настройки, используем отдельный профиль s3flood
+    # и динамически обновляем его настройки
+    profile_to_use = None
+    if multipart_threshold is not None or multipart_chunksize is not None or max_concurrent_requests is not None:
+        # Используем отдельный профиль s3flood для наших настроек
+        profile_to_use = "s3flood"
+        # Настраиваем параметры multipart для этого профиля
+        _configure_aws_profile_multipart(
+            profile_to_use,
+            multipart_threshold,
+            multipart_chunksize,
+            max_concurrent_requests
+        )
+        # Если у пользователя есть aws_profile, копируем credentials из него
+        if aws_profile:
+            # Копируем credentials из исходного профиля в s3flood
+            # (если они не заданы явно через access_key/secret_key)
+            if not (access_key and secret_key):
+                # Получаем credentials из исходного профиля
                 try:
-                    os.unlink(temp_config_file)
+                    result = subprocess.run(
+                        ["aws", "configure", "get", "aws_access_key_id", "--profile", aws_profile],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        access_key = result.stdout.strip()
+                    result = subprocess.run(
+                        ["aws", "configure", "get", "aws_secret_access_key", "--profile", aws_profile],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0 and result.stdout.strip():
+                        secret_key = result.stdout.strip()
                 except Exception:
                     pass
-                temp_config_file = None
-        
-        # Также устанавливаем переменные окружения на случай, если они сработают
-        env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_config)
+    elif aws_profile:
+        # Если multipart настройки не заданы, используем исходный профиль
+        profile_to_use = aws_profile
     
-    if aws_profile:
-        env["AWS_PROFILE"] = aws_profile
+    if profile_to_use:
+        env["AWS_PROFILE"] = profile_to_use
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
     elif access_key and secret_key:
@@ -541,7 +575,24 @@ def _get_aws_env(
         env.pop("AWS_PROFILE", None)
         env.pop("AWS_ACCESS_KEY_ID", None)
         env.pop("AWS_SECRET_ACCESS_KEY", None)
-    return env, temp_config_file
+    
+    # Если заданы credentials явно и используется профиль s3flood, настраиваем их
+    if profile_to_use == "s3flood" and access_key and secret_key:
+        try:
+            subprocess.run(
+                ["aws", "configure", "set", "aws_access_key_id", access_key, "--profile", "s3flood"],
+                capture_output=True,
+                timeout=5
+            )
+            subprocess.run(
+                ["aws", "configure", "set", "aws_secret_access_key", secret_key, "--profile", "s3flood"],
+                capture_output=True,
+                timeout=5
+            )
+        except Exception:
+            pass
+    
+    return env, profile_to_use
 
 
 def aws_cp_upload(
@@ -561,26 +612,17 @@ def aws_cp_upload(
     AWS CLI автоматически определяет, использовать ли multipart upload на основе
     multipart_threshold из переменной окружения AWS_CLI_FILE_TRANSFER_CONFIG.
     """
-    env, temp_config_file = _get_aws_env(
+    env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     # Всегда используем aws s3 cp - он автоматически выберет multipart или обычный PUT
-    # на основе multipart_threshold из переменных окружения или временного конфиг-файла
+    # на основе multipart_threshold из настроек профиля
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
-    if temp_config_file:
-        cmd.extend(["--config-file", temp_config_file])
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        return result
-    finally:
-        # Удаляем временный конфиг-файл после использования
-        if temp_config_file:
-            try:
-                os.unlink(temp_config_file)
-            except Exception:
-                pass
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
 def aws_list_objects(
@@ -594,23 +636,15 @@ def aws_list_objects(
     max_concurrent_requests: int | None = None,
 ):
     """Получает список объектов из бакета через s3api list-objects-v2."""
-    env, temp_config_file = _get_aws_env(
+    env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "list-objects-v2", "--bucket", bucket_name, "--endpoint-url", endpoint]
-    if temp_config_file:
-        cmd.extend(["--config-file", temp_config_file])
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        return res
-    finally:
-        if temp_config_file:
-            try:
-                os.unlink(temp_config_file)
-            except Exception:
-                pass
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
     if res.returncode != 0:
         return None
     try:
@@ -638,22 +672,15 @@ def aws_check_bucket_access(
     max_concurrent_requests: int | None = None,
 ):
     """Быстрая проверка доступа к бакету через s3api head-bucket."""
-    env, temp_config_file = _get_aws_env(
+    env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     bucket_name = bucket.replace("s3://", "").split("/")[0]
     cmd = ["aws", "s3api", "head-bucket", "--bucket", bucket_name, "--endpoint-url", endpoint]
-    if temp_config_file:
-        cmd.extend(["--config-file", temp_config_file])
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, env=env)
-    finally:
-        if temp_config_file:
-            try:
-                os.unlink(temp_config_file)
-            except Exception:
-                pass
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
+    return subprocess.run(cmd, capture_output=True, text=True, env=env)
 
 
 def aws_cp_download(
@@ -676,45 +703,37 @@ def aws_cp_download(
     Примечание: multipart upload используется только для upload, не для download.
     Но aws s3 cp использует оптимизации для download через параллельные range requests.
     """
-    env, temp_config_file = _get_aws_env(
+    env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
     # Используем aws s3 cp для download - он может использовать параллельные запросы для больших файлов
-    # max_concurrent_requests из временного конфиг-файла влияет на количество параллельных запросов
+    # max_concurrent_requests из настроек профиля влияет на количество параллельных запросов
     devnull = "NUL" if os.name == "nt" else "/dev/null"
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
-    if temp_config_file:
-        cmd.extend(["--config-file", temp_config_file])
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, env=env)
-        # Если команда успешна (returncode == 0), возвращаем результат как есть
-        if res.returncode == 0:
-            return res
-        # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
-        if res.returncode != 0 and res.stderr:
-            # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
-            # но данные уже загружены, так что это не критично
-            if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
-               ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
-                # Данные загружены успешно, просто не удалось обновить время модификации
-                # Создаём фиктивный успешный результат
-                class FakeResult:
-                    returncode = 0
-                    stdout = res.stdout
-                    stderr = ""
-                    args = res.args
-                return FakeResult()
-        # Для всех остальных ошибок возвращаем исходный результат
+    if profile_name:
+        cmd.extend(["--profile", profile_name])
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # Если команда успешна (returncode == 0), возвращаем результат как есть
+    if res.returncode == 0:
         return res
-    finally:
-        # Удаляем временный конфиг-файл после использования
-        if temp_config_file:
-            try:
-                os.unlink(temp_config_file)
-            except Exception:
-                pass
+    # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
+    if res.returncode != 0 and res.stderr:
+        # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
+        # но данные уже загружены, так что это не критично
+        if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
+           ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
+            # Данные загружены успешно, просто не удалось обновить время модификации
+            # Создаём фиктивный успешный результат
+            class FakeResult:
+                returncode = 0
+                stdout = res.stdout
+                stderr = ""
+                args = res.args
+            return FakeResult()
+    # Для всех остальных ошибок возвращаем исходный результат
+    return res
 
 
 def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwargs):
