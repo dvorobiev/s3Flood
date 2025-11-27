@@ -115,7 +115,7 @@ def build_default_config() -> Dict[str, Any]:
     return {
         "client": "awscli",
         "bucket": "your-bucket-name",
-        "endpoint": "http://localhost:9000:9080",
+        "endpoint": "http://127.0.0.1:9000",
         "endpoints": [],
         "endpoint_mode": "round-robin",
         "access_key": None,
@@ -147,9 +147,12 @@ class ConfigEditorApp:
         self.initial = deepcopy(self.state)
         self.fields = FIELD_DEFS
         self.selection = 0
-        self.message = "↑/↓ — выбор · Enter — редактировать · S — сохранить · Esc — отмена"
+        # Дополнительный текст сообщений больше не выводим отдельной строкой
+        self.message = ""
         self.editing = False
         self.active_field: Optional[FieldSpec] = None
+        # Флаг: пользователь вышел в меню, имея несохранённые изменения.
+        self.cancel_with_changes = False
         self.input_field = TextArea(height=1, prompt="> ", multiline=False)
         self.input_field.accept_handler = self._accept_input
         self.body_control = FormattedTextControl(self._render_lines)
@@ -168,16 +171,10 @@ class ConfigEditorApp:
             ),
             filter=Condition(lambda: self.editing),
         )
-        self.footer = Window(height=1, content=FormattedTextControl(self._render_footer))
         root = HSplit(
             [
-                Window(
-                    content=FormattedTextControl(lambda: FormattedText([("", self.title)])),
-                    height=1,
-                ),
                 self.body_window,
                 self.input_container,
-                self.footer,
             ]
         )
         self.kb = KeyBindings()
@@ -192,7 +189,7 @@ class ConfigEditorApp:
             layout=Layout(root, focused_element=self.body_window),
             key_bindings=self.kb,
             mouse_support=False,
-            full_screen=True,
+            full_screen=False,
             style=Style.from_dict(
                 {
                     "status": "reverse",
@@ -209,27 +206,44 @@ class ConfigEditorApp:
         return self.result
 
     def _current_field(self) -> FieldSpec:
-        return self.fields[self.selection]
+        # Для служебных строк внизу возвращаем последний field; вызывающий код
+        # обязан проверять selection и не использовать это поле напрямую.
+        idx = min(self.selection, len(self.fields) - 1)
+        return self.fields[idx]
 
     def _render_lines(self):
         fragments: List[tuple[str, str]] = []
-        for idx, field in enumerate(self.fields):
-            if field.key == "__connection__":
-                value = self._connection_value()
-                changed = self._connection_changed()
+        # Параметры + разделитель + две служебные строки (сохранить/выход)
+        total_rows = len(self.fields) + 3
+        for idx in range(total_rows):
+            # Унифицированный курсор, как в остальных меню
+            cursor = "»" if idx == self.selection else " "
+            marker = " "
+
+            if idx < len(self.fields):
+                field = self.fields[idx]
+                if field.key == "__connection__":
+                    value = self._connection_value()
+                    changed = self._connection_changed()
+                else:
+                    value = self._format_value(field, self.state.get(field.key))
+                    changed = self._is_changed(field.key)
+                if changed:
+                    marker = "*"
+                label = f"{field.label:<30}"
+                line = f"{cursor} {marker} {label} {value}"
+            elif idx == len(self.fields):
+                # Визуальный разделитель между списком параметров и действиями, как Separator() в меню
+                line = "  " + "-" * 40
             else:
-                value = self._format_value(field, self.state.get(field.key))
-                changed = self._is_changed(field.key)
-            marker = "*" if changed else " "
-            label = f"{field.label:<30}"
-            style_label = "class:line.selected" if idx == self.selection else ""
-            value_style = "class:changed" if changed else "class:value"
-            fragments.append((style_label, f"{marker} {label} "))
-            fragments.append((value_style, value))
-            fragments.append(("", "\n"))
-        # Разделитель и подсказки управления в стиле остального меню
-        fragments.append(("", "─" * 60 + "\n"))
-        fragments.append(("", "[S] Сохранить конфиг    [Q] Вернуться в меню    [Esc] Отмена ввода\n"))
+                # Две последние строки — действия
+                if idx == len(self.fields) + 1:
+                    line = f"{cursor}   💾 Сохранить изменения"
+                else:  # len(self.fields) + 2
+                    line = f"{cursor}   ⬅️ Вернуться в меню"
+
+            fragments.append(("", line + "\n"))
+
         return fragments
 
     def _format_value(self, field: FieldSpec, value: Any) -> str:
@@ -276,12 +290,11 @@ class ConfigEditorApp:
             ]
         )
 
-    def _render_footer(self):
-        info = self.message
-        return FormattedText([("class:status", info)])
-
     def _is_changed(self, key: str) -> bool:
         return self.state.get(key) != self.initial.get(key)
+
+    def _has_any_changes(self) -> bool:
+        return any(self._is_changed(f.key) for f in self.fields if f.key != "__connection__")
 
     def _refresh(self):
         self.app.invalidate()
@@ -296,7 +309,8 @@ class ConfigEditorApp:
     def _key_down(self, event):
         if self.editing:
             return
-        if self.selection < len(self.fields) - 1:
+        max_row = len(self.fields) + 2  # последняя строка — «Выйти в меню»
+        if self.selection < max_row:
             self.selection += 1
             self._refresh()
 
@@ -311,21 +325,35 @@ class ConfigEditorApp:
             self._cancel_input()
         else:
             self.result = None
-            event.app.exit()
+            # Могут вызывать и без события (например, из служебных строк)
+            self.app.exit()
 
     def _key_save(self, event):
         if self.editing:
             return
         self.result = self._prepare_result()
-        event.app.exit()
+        self.app.exit()
 
     def _key_cancel(self, event):
         if self.editing:
             return
+        # Отмечаем, были ли несохранённые изменения на момент выхода.
+        self.cancel_with_changes = self._has_any_changes()
         self.result = None
-        event.app.exit()
+        self.app.exit()
 
     def _activate_field(self):
+        # Служебные строки обрабатываем отдельно
+        if self.selection >= len(self.fields):
+            if self.selection == len(self.fields) + 1:
+                # «Сохранить изменения»
+                self._key_save(event=None)
+            elif self.selection == len(self.fields) + 2:
+                # «Выход в меню» (отмена)
+                self._key_cancel(event=None)
+            # Если курсор стоит на разделителе — ничего не делаем
+            return
+
         field = self._current_field()
         if field.key == "__connection__":
             self._toggle_connection_mode()
@@ -472,8 +500,9 @@ class ConfigEditorApp:
         return result
 
 
-def edit_config_interactively(data: Dict[str, Any], title: str) -> Optional[Dict[str, Any]]:
+def edit_config_interactively(data: Dict[str, Any], title: str):
     app = ConfigEditorApp(data, title)
-    return app.run()
+    app.run()
+    return app.result, app.cancel_with_changes
 
 

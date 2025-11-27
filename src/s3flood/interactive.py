@@ -634,6 +634,14 @@ def edit_config_menu():
     else:
         cfg_path = cwd / selected
 
+    # Отрисовываем заголовок и подсказку в едином стиле, как в остальных меню
+    console.clear()
+    console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
+    console.print(f"[bold]Файл:[/bold] [cyan]{cfg_path}[/cyan]")
+    console.print(
+        "[dim]Enter — изменить значение. Для переключаемых полей (Yes/No, порядок) переключение происходит сразу.[/dim]\n"
+    )
+
     # Читаем YAML как словарь, чтобы сохранить структуру файла
     try:
         with open(cfg_path, "r", encoding="utf-8") as f:
@@ -644,10 +652,12 @@ def edit_config_menu():
         return
 
     run_section = raw_cfg.get("run") or {}
-    edited = edit_config_interactively(run_section, f"Редактировать конфиг: {cfg_path}")
+    # Внутри редактора показываем только список параметров; заголовок уже нарисован выше.
+    edited, cancelled_with_changes = edit_config_interactively(run_section, str(cfg_path))
     if edited is None:
-        console.print("[yellow]Изменения отменены.[/yellow]")
-        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        if cancelled_with_changes:
+            console.print("[yellow]Изменения отменены.[/yellow]")
+            questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
     raw_cfg["run"] = edited
