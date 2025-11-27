@@ -497,8 +497,19 @@ def _get_aws_env(
     
     # Устанавливаем переменную окружения только если есть хотя бы один параметр
     # Если все параметры None, AWS CLI будет использовать настройки из ~/.aws/config
+    # 
+    # ВАЖНО: AWS_CLI_FILE_TRANSFER_CONFIG может не переопределять ~/.aws/config в некоторых версиях AWS CLI.
+    # Если настройки не применяются, возможно, нужно использовать временный конфиг-файл или параметры командной строки.
     if transfer_config:
         env["AWS_CLI_FILE_TRANSFER_CONFIG"] = json.dumps(transfer_config)
+        # Также устанавливаем переменные для boto3/s3transfer напрямую (на случай, если AWS CLI их не читает)
+        # Эти переменные используются boto3, который используется AWS CLI под капотом
+        if "multipart_threshold" in transfer_config:
+            env["AWS_S3_MULTIPART_THRESHOLD"] = str(transfer_config["multipart_threshold"])
+        if "multipart_chunksize" in transfer_config:
+            env["AWS_S3_MULTIPART_CHUNKSIZE"] = str(transfer_config["multipart_chunksize"])
+        if "max_concurrent_requests" in transfer_config:
+            env["AWS_S3_MAX_CONCURRENT_REQUESTS"] = str(transfer_config["max_concurrent_requests"])
     if aws_profile:
         env["AWS_PROFILE"] = aws_profile
         env.pop("AWS_ACCESS_KEY_ID", None)
