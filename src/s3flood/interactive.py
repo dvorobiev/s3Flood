@@ -79,14 +79,14 @@ class DotSpinner:
         if self._thread is not None:
             self._thread.join()
         # Очищаем строку со спиннером
-        console.print("\r" + " " * 80 + "\r", end="", soft_wrap=False)
+        console.file.write("\r" + " " * 80 + "\r")
         console.file.flush()
 
     def _run(self):
         while not self._stop.is_set():
             # Используем тот же спиннер, что и в дашборде
             frame = get_spinner()
-            console.print(f"\r{frame}", end="", soft_wrap=False)
+            console.file.write(f"\r{frame}")
             console.file.flush()
             time.sleep(0.1)
 
