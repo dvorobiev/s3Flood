@@ -1058,10 +1058,24 @@ def run_profile(args):
     
     # Обработчик сигнала для корректного завершения всех процессов
     original_sigint = None
+    interrupt_count = [0]  # Используем список для изменяемого значения в замыкании
+    
     def signal_handler(signum, frame):
         """Обработчик сигнала прерывания для завершения всех активных процессов."""
-        stop.set()
-        _terminate_all_processes()
+        interrupt_count[0] += 1
+        if interrupt_count[0] == 1:
+            # Первое прерывание - корректное завершение
+            print("\n[Получен сигнал прерывания, завершаем процессы...]", flush=True)
+            stop.set()
+            _terminate_all_processes()
+        else:
+            # Второе прерывание - принудительный выход
+            print("\n[Принудительное завершение...]", flush=True)
+            _terminate_all_processes()
+            # Восстанавливаем стандартный обработчик и вызываем его
+            if original_sigint is not None and original_sigint != signal.SIG_IGN:
+                signal.signal(signal.SIGINT, original_sigint)
+                os.kill(os.getpid(), signal.SIGINT)
     
     # Регистрируем обработчик сигнала только в главном потоке
     if threading.current_thread() is threading.main_thread():
@@ -1682,8 +1696,11 @@ def run_profile(args):
                 sys.stdout.flush()
                 last_print = now
     except KeyboardInterrupt:
-        stop.set()
-        _terminate_all_processes()
+        # Если KeyboardInterrupt все еще произошел (например, если обработчик сигнала не сработал)
+        if not stop.is_set():
+            print("\n[Получен сигнал прерывания, завершаем процессы...]", flush=True)
+            stop.set()
+            _terminate_all_processes()
 
     # Восстанавливаем оригинальный обработчик сигнала
     if threading.current_thread() is threading.main_thread() and original_sigint is not None:
