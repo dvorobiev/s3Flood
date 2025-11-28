@@ -154,18 +154,24 @@ def run_test_menu():
     cwd = Path(".").resolve()
     configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
     choices = [str(cfg.name) for cfg in configs]
-    choices.append("Ввести путь вручную")
-    choices.append("Вернуться в главное меню")
+    choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
+    # Разделяем список конфигов и пункт возврата в меню, как в других подменю
+    choices.append(questionary.Separator())
+    choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
+
+    console.print(
+        "[dim]Стрелки — выбрать конфиг, Enter — продолжить, ⬅️ Вернуться в главное меню — выйти без запуска.[/dim]\n"
+    )
 
     choice = questionary.select(
         "Выберите конфиг:",
         choices=choices,
         use_indicator=False,
     ).ask()
-    if not choice or choice == "Вернуться в главное меню":
+    if not choice or choice.startswith("⬅️"):
         return
 
-    if choice == "Ввести путь вручную":
+    if choice.startswith("📂"):
         config_path = questionary.path(
             "Укажите путь к YAML-конфигу (например, config.yaml):",
             completer=path_completer,
@@ -871,12 +877,12 @@ def validate_config_menu():
     action = questionary.select(
         "\nДополнительные действия:",
         choices=[
-            "Вернуться в главное меню",
+            f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню",
             "Удалить ВСЕ объекты из бакета",
         ],
     ).ask()
 
-    if action == "Вернуться в главное меню":
+    if not action or action.startswith("⬅️"):
         # Просто выходим без лишнего подтверждения
         return
 
