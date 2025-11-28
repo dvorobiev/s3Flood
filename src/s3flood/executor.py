@@ -1,4 +1,4 @@
-import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random, math, uuid
+import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random, math, uuid, signal, inspect
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass
@@ -35,6 +35,10 @@ CUSTOM_AWS_CONFIG_PATH = Path(
 ).expanduser()
 _custom_config_signature: tuple | None = None
 _custom_config_lock = threading.Lock()
+
+# Механизм отслеживания активных процессов для корректного завершения при прерывании
+_active_processes: set[subprocess.Popen] = set()
+_active_processes_lock = threading.Lock()
 
 WRITE_ICON = "↑"
 READ_ICON = "↓"
@@ -536,6 +540,40 @@ class Metrics:
         return out
 
 
+def _register_process(proc: subprocess.Popen) -> None:
+    """Регистрирует процесс в списке активных для возможности прерывания."""
+    with _active_processes_lock:
+        _active_processes.add(proc)
+
+
+def _unregister_process(proc: subprocess.Popen) -> None:
+    """Удаляет процесс из списка активных."""
+    with _active_processes_lock:
+        _active_processes.discard(proc)
+
+
+def _terminate_all_processes() -> None:
+    """Завершает все активные процессы при прерывании."""
+    with _active_processes_lock:
+        processes_to_terminate = list(_active_processes)
+    for proc in processes_to_terminate:
+        try:
+            if proc.poll() is None:  # Процесс еще работает
+                proc.terminate()
+                # Даем процессу время на корректное завершение
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    # Если не завершился за 2 секунды, принудительно убиваем
+                    proc.kill()
+                    proc.wait()
+        except Exception:
+            # Игнорируем ошибки при завершении процессов
+            pass
+    with _active_processes_lock:
+        _active_processes.clear()
+
+
 def _get_aws_env(
     access_key: str | None,
     secret_key: str | None,
@@ -592,11 +630,15 @@ def aws_cp_upload(
     multipart_threshold: int | None = None,
     multipart_chunksize: int | None = None,
     max_concurrent_requests: int | None = None,
+    stop: threading.Event | None = None,
 ):
     """
     Загружает файл в S3 используя aws s3 cp.
     AWS CLI автоматически определяет, использовать ли multipart upload на основе
     multipart_threshold из переменной окружения AWS_CLI_FILE_TRANSFER_CONFIG.
+    
+    Args:
+        stop: Event для проверки прерывания. Если установлен, процесс будет прерван.
     """
     env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
@@ -608,7 +650,29 @@ def aws_cp_upload(
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
     if profile_name:
         cmd.extend(["--profile", profile_name])
-    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    
+    # Используем Popen для возможности прерывания
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    _register_process(proc)
+    
+    try:
+        # Ожидаем завершения процесса, периодически проверяя stop
+        while proc.poll() is None:
+            if stop and stop.is_set():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                break
+            time.sleep(0.1)
+        
+        stdout, stderr = proc.communicate()
+        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        return result
+    finally:
+        _unregister_process(proc)
 
 
 def aws_list_objects(
@@ -679,6 +743,7 @@ def aws_cp_download(
     multipart_threshold: int | None = None,
     multipart_chunksize: int | None = None,
     max_concurrent_requests: int | None = None,
+    stop: threading.Event | None = None,
 ):
     """
     Скачивает файл из S3 используя aws s3 cp.
@@ -688,6 +753,9 @@ def aws_cp_download(
     
     Примечание: multipart upload используется только для upload, не для download.
     Но aws s3 cp использует оптимизации для download через параллельные range requests.
+    
+    Args:
+        stop: Event для проверки прерывания. Если установлен, процесс будет прерван.
     """
     env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
@@ -700,40 +768,75 @@ def aws_cp_download(
     cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
     if profile_name:
         cmd.extend(["--profile", profile_name])
-    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    # Если команда успешна (returncode == 0), возвращаем результат как есть
-    if res.returncode == 0:
+    
+    # Используем Popen для возможности прерывания
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    _register_process(proc)
+    
+    try:
+        # Ожидаем завершения процесса, периодически проверяя stop
+        while proc.poll() is None:
+            if stop and stop.is_set():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                break
+            time.sleep(0.1)
+        
+        stdout, stderr = proc.communicate()
+        res = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        
+        # Если команда успешна (returncode == 0), возвращаем результат как есть
+        if res.returncode == 0:
+            return res
+        # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
+        if res.returncode != 0 and res.stderr:
+            # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
+            # но данные уже загружены, так что это не критично
+            if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
+               ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
+                # Данные загружены успешно, просто не удалось обновить время модификации
+                # Создаём фиктивный успешный результат
+                class FakeResult:
+                    returncode = 0
+                    stdout = res.stdout
+                    stderr = ""
+                    args = res.args
+                return FakeResult()
+        # Для всех остальных ошибок возвращаем исходный результат
         return res
-    # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
-    if res.returncode != 0 and res.stderr:
-        # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
-        # но данные уже загружены, так что это не критично
-        if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
-           ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
-            # Данные загружены успешно, просто не удалось обновить время модификации
-            # Создаём фиктивный успешный результат
-            class FakeResult:
-                returncode = 0
-                stdout = res.stdout
-                stderr = ""
-                args = res.args
-            return FakeResult()
-    # Для всех остальных ошибок возвращаем исходный результат
-    return res
+    finally:
+        _unregister_process(proc)
 
 
-def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwargs):
+def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, stop: threading.Event | None = None, **kwargs):
     """Выполняет функцию с повторными попытками и экспоненциальным backoff."""
     last_error = None
     for attempt in range(max_retries + 1):
+        # Проверяем stop перед каждой попыткой
+        if stop and stop.is_set():
+            return None, False, "interrupted by user"
         try:
-            result = func(*args, **kwargs)
+            # Передаем stop в функцию, если она его принимает
+            # Проверяем сигнатуру функции для определения, принимает ли она stop
+            sig = inspect.signature(func)
+            if 'stop' in sig.parameters:
+                result = func(*args, stop=stop, **kwargs)
+            else:
+                result = func(*args, **kwargs)
             # Проверяем успешность операции
             if result is None:
                 last_error = "function returned None"
                 if attempt < max_retries:
                     wait_time = backoff_base ** attempt
-                    time.sleep(wait_time)
+                    # Проверяем stop во время ожидания
+                    for _ in range(int(wait_time * 10)):
+                        if stop and stop.is_set():
+                            return None, False, "interrupted by user"
+                        time.sleep(0.1)
                     continue
                 else:
                     return None, False, last_error
@@ -742,7 +845,11 @@ def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwa
                 last_error = f"result has no returncode attribute, type: {type(result)}"
                 if attempt < max_retries:
                     wait_time = backoff_base ** attempt
-                    time.sleep(wait_time)
+                    # Проверяем stop во время ожидания
+                    for _ in range(int(wait_time * 10)):
+                        if stop and stop.is_set():
+                            return None, False, "interrupted by user"
+                        time.sleep(0.1)
                     continue
                 else:
                     return result, False, last_error
@@ -752,7 +859,11 @@ def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwa
             # Если returncode != 0, это ошибка
             elif attempt < max_retries:
                 wait_time = backoff_base ** attempt
-                time.sleep(wait_time)
+                # Проверяем stop во время ожидания
+                for _ in range(int(wait_time * 10)):
+                    if stop and stop.is_set():
+                        return None, False, "interrupted by user"
+                    time.sleep(0.1)
                 last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else f"exit code {result.returncode}"
             else:
                 last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else f"exit code {result.returncode}"
@@ -760,7 +871,11 @@ def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, **kwa
         except Exception as e:
             if attempt < max_retries:
                 wait_time = backoff_base ** attempt
-                time.sleep(wait_time)
+                # Проверяем stop во время ожидания
+                for _ in range(int(wait_time * 10)):
+                    if stop and stop.is_set():
+                        return None, False, "interrupted by user"
+                    time.sleep(0.1)
                 last_error = str(e)
             else:
                 last_error = str(e)
@@ -940,6 +1055,19 @@ def run_profile(args):
     metrics = Metrics(args.metrics, args.report)
 
     stop = threading.Event()
+    
+    # Обработчик сигнала для корректного завершения всех процессов
+    original_sigint = None
+    def signal_handler(signum, frame):
+        """Обработчик сигнала прерывания для завершения всех активных процессов."""
+        stop.set()
+        _terminate_all_processes()
+    
+    # Регистрируем обработчик сигнала только в главном потоке
+    if threading.current_thread() is threading.main_thread():
+        original_sigint = signal.signal(signal.SIGINT, signal_handler)
+        # Сохраняем оригинальный обработчик для восстановления при выходе
+    
     active_lock = threading.Lock()
     active_uploads = 0
     active_downloads = 0
@@ -1041,6 +1169,7 @@ def run_profile(args):
                     getattr(args, "aws_cli_multipart_threshold", None),
                     getattr(args, "aws_cli_multipart_chunksize", None),
                     getattr(args, "aws_cli_max_concurrent_requests", None),
+                    stop=stop,
                 )
                 if not ok and res is None:
                     err = err or "retry failed"
@@ -1086,6 +1215,7 @@ def run_profile(args):
                     getattr(args, "aws_cli_multipart_threshold", None),
                     getattr(args, "aws_cli_multipart_chunksize", None),
                     getattr(args, "aws_cli_max_concurrent_requests", None),
+                    stop=stop,
                 )
                 end = time.time()
                 # Детальная диагностика для отладки
@@ -1553,6 +1683,14 @@ def run_profile(args):
                 last_print = now
     except KeyboardInterrupt:
         stop.set()
+        _terminate_all_processes()
+
+    # Восстанавливаем оригинальный обработчик сигнала
+    if threading.current_thread() is threading.main_thread() and original_sigint is not None:
+        signal.signal(signal.SIGINT, original_sigint)
+
+    # Завершаем все процессы перед выходом
+    _terminate_all_processes()
 
     for t in threads:
         t.join()
