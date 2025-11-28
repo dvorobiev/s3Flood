@@ -1,0 +1,15 @@
+run:
+  profile: write
+  client: awscli
+  endpoint: http://192.168.20.35:9080
+  bucket: cluster_test
+  access_key: fMIwNE-6kamj3s9LSADxhfJL
+  secret_key: TSDFYQYucGxDEC0F5c4x_1QtlzLBsCkzkubA_WF_
+  threads: 8
+  data_dir: ./loadset/data
+  report: out.json
+  metrics: out.csv
+  infinite: false
+  mixed_read_ratio: 0.7
+  order: random
+  unique_remote_names: true

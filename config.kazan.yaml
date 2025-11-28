@@ -1,0 +1,14 @@
+run:
+  profile: write
+  client: awscli
+  bucket: your-bucket-name
+  threads: 8
+  data_dir: ./loadset/data
+  report: out.json
+  metrics: out.csv
+  infinite: false
+  order: random
+  unique_remote_names: true
+  endpoint: http://localhost:9000
+  access_key: YOUR_ACCESS_KEY
+  secret_key: YOUR_SECRET_KEY
