@@ -25,9 +25,11 @@ jobs:
 
       - name: Install project
         run: |
-          pip install -U pip
+          pip install -U pip setuptools wheel
+          # Устанавливаем зависимости явно
+          pip install pydantic>=2.7 rich>=13.7 pyyaml>=6.0 prompt-toolkit>=3.0.0 questionary>=2.0.0
+          # Устанавливаем проект
           pip install -e .
-
       - name: Start MinIO
         run: |
           docker run -d --name minio \
