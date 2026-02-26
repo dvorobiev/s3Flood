@@ -3,7 +3,6 @@ import sys
 from .config import load_run_config, resolve_run_settings
 from .dataset import plan_and_generate
 from .executor import run_profile
-from .interactive import run_interactive
 
 
 def main():
@@ -131,6 +130,7 @@ def main():
 
     # Запуск интерактивного меню, если указан флаг или нет команды
     if args.interactive or args.cmd is None:
+        from .interactive import run_interactive
         run_interactive()
         return
 
