@@ -658,6 +658,9 @@ def edit_config_menu():
         return
 
     run_section = raw_cfg.get("run") or {}
+    if isinstance(run_section, list):
+        # Секция run записана как список — берём первый dict-элемент
+        run_section = next((item for item in run_section if isinstance(item, dict)), {})
     # Внутри редактора показываем только список параметров; заголовок уже нарисован выше.
     edited, cancelled_with_changes = edit_config_interactively(run_section, str(cfg_path))
     if edited is None:

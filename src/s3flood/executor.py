@@ -295,13 +295,17 @@ class Metrics:
     def current_rates(self, window_sec=5.0):
         now = time.time()
         rb = wb = 0
-        ops = 0
+        read_ops = write_ops = 0
         for t, op, nbytes, ok, lat_ms in list(self.window):
             if now - t <= window_sec and ok:
-                ops += 1
-                if op == "download": rb += nbytes
-                elif op == "upload": wb += nbytes
-        return rb/window_sec, wb/window_sec, ops/window_sec if window_sec > 0 else 0.0
+                if op == "download":
+                    rb += nbytes
+                    read_ops += 1
+                elif op == "upload":
+                    wb += nbytes
+                    write_ops += 1
+        w = window_sec if window_sec > 0 else 1.0
+        return rb/w, wb/w, write_ops/w, read_ops/w
 
     def last_latency_ms(self, op: str) -> float | None:
         data = self.last_download if op == "download" else self.last_upload
@@ -1450,7 +1454,7 @@ def run_profile(args):
                                         break
             
             if now - last_print >= 0.5:  # Обновляем дашборд каждые 0.5 секунды для плавной анимации спиннера
-                rbps, wbps, ops_per_sec = metrics.current_rates(5.0)
+                rbps, wbps, write_rps, read_rps = metrics.current_rates(5.0)
                 files_done = metrics.write_ops_ok
                 files_read = metrics.read_ops_ok
                 files_err = metrics.err_ops
@@ -1487,7 +1491,8 @@ def run_profile(args):
                 rbps_mb = rbps / 1024 / 1024
                 avg_wbps_mb = avg_wbps / 1024 / 1024
                 avg_rbps_mb = avg_rbps / 1024 / 1024
-                ops_per_sec = max(ops_per_sec, 0.0)
+                write_rps = max(write_rps, 0.0)
+                read_rps = max(read_rps, 0.0)
                 
                 # ETA: для фазы записи или чтения
                 eta_sec = None
@@ -1598,7 +1603,13 @@ def run_profile(args):
                 if pattern == "bursty" and burst_active:
                     effective_threads = int(args.threads * burst_intensity_multiplier)
                 
-                load_line = f"Load active {inflight}/{effective_threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} tasks | ops {ops_per_sec:.2f} files/s"
+                if profile == "read":
+                    rps_part = f"R-RPS {read_rps:.2f}"
+                elif profile == "write":
+                    rps_part = f"W-RPS {write_rps:.2f}"
+                else:
+                    rps_part = f"W-RPS {write_rps:.2f} | R-RPS {read_rps:.2f}"
+                load_line = f"Load active {inflight}/{effective_threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} tasks | {rps_part}"
                 plain_lines.append(load_line)
                 styled_lines.append((load_line, (ANSI_BLUE,), False))
                 
