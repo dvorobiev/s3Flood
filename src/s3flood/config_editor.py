@@ -178,14 +178,15 @@ class ConfigEditorApp:
                 self.input_container,
             ]
         )
+        not_editing = Condition(lambda: not self.editing)
         self.kb = KeyBindings()
         self.kb.add("up")(self._key_up)
         self.kb.add("down")(self._key_down)
         self.kb.add("enter")(self._key_enter)
         self.kb.add("escape")(self._key_escape)
         self.kb.add("c-c")(self._key_escape)
-        self.kb.add("s")(self._key_save)
-        self.kb.add("q")(self._key_cancel)
+        self.kb.add("s", filter=not_editing)(self._key_save)
+        self.kb.add("q", filter=not_editing)(self._key_cancel)
         self.app = Application(
             layout=Layout(root, focused_element=self.body_window),
             key_bindings=self.kb,
