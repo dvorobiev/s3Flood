@@ -7,10 +7,97 @@ import pytest
 from s3flood.metrics import (
     MetricsCsvWriter,
     RateWindow,
+    analyze_operations,
     percentile,
+    read_ops_csv,
     summarize_latencies,
     summarize_speeds,
 )
+
+
+def make_op(**over):
+    base = {
+        "ts_start": 1000.0, "ts_end": 1001.0, "op": "upload", "bytes": 1024**2,
+        "status": "ok", "latency_ms": 1000.0, "error": "",
+        "endpoint": "", "attempt": "", "size_group": "",
+    }
+    base.update(over)
+    return base
+
+
+class TestAnalyzeOperations:
+    def test_basic_totals_and_latency(self):
+        ops = [
+            make_op(ts_start=1000, ts_end=1001, latency_ms=1000),
+            make_op(ts_start=1001, ts_end=1003, latency_ms=2000),
+            make_op(ts_start=1003, ts_end=1004, status="err",
+                    error="An error occurred (SlowDown) when calling ..."),
+        ]
+        r = analyze_operations(ops)
+        assert r["total"] == 3 and r["ok"] == 2 and r["err"] == 1
+        assert r["ok_bytes"] == 2 * 1024**2
+        assert r["duration_s"] == pytest.approx(4.0)
+        assert r["latency"]["p50_ms"] == pytest.approx(1500)
+        assert r["errors"] == {"SlowDown": 1}
+        assert r["by_op"]["upload"]["count"] == 2
+
+    def test_size_buckets_use_size_group_when_present(self):
+        ops = [make_op(size_group="small"), make_op(size_group="large", bytes=10 * 1024**2)]
+        r = analyze_operations(ops)
+        labels = [b["label"] for b in r["size_buckets"]]
+        assert "small" in labels and "large" in labels
+
+    def test_size_buckets_auto_without_group(self):
+        ops = [make_op(bytes=100 * 1024), make_op(bytes=2 * 1024**3, ts_end=1010)]
+        r = analyze_operations(ops)
+        labels = [b["label"] for b in r["size_buckets"]]
+        assert "<1MB" in labels and "≥1GB" in labels
+
+    def test_endpoint_breakdown(self):
+        ops = [make_op(endpoint="http://n1"), make_op(endpoint="http://n2"),
+               make_op(endpoint="http://n1")]
+        r = analyze_operations(ops)
+        assert r["by_endpoint"]["http://n1"]["count"] == 2
+        assert r["by_endpoint"]["http://n2"]["count"] == 1
+
+    def test_retries_counted(self):
+        ops = [make_op(attempt="1"), make_op(attempt="3")]
+        r = analyze_operations(ops)
+        assert r["retries"]["ops_with_retries"] == 1
+        assert r["retries"]["max_attempt"] == 3
+
+    def test_rps_series_for_sparkline(self):
+        ops = [make_op(ts_start=1000 + i, ts_end=1000.5 + i) for i in range(10)]
+        r = analyze_operations(ops)
+        assert sum(r["rps_series"]) == 10
+
+    def test_empty(self):
+        assert analyze_operations([]) is None
+
+
+class TestReadOpsCsv:
+    def test_reads_new_format(self, tmp_path):
+        p = tmp_path / "m.csv"
+        w = MetricsCsvWriter(str(p))
+        w.write_row(ts_start=1.0, ts_end=2.0, op="upload", nbytes=100, ok=True,
+                    latency_ms=1000, endpoint="http://e", thread_id=1, attempt=2,
+                    size_group="small")
+        w.close()
+        ops = read_ops_csv(str(p))
+        assert len(ops) == 1
+        assert ops[0]["size_group"] == "small"
+        assert ops[0]["bytes"] == 100
+
+    def test_reads_old_format(self, tmp_path):
+        p = tmp_path / "old.csv"
+        p.write_text(
+            "ts_start,ts_end,op,bytes,status,latency_ms,error\n"
+            "1.0,2.0,upload,100,ok,1000,\n"
+        )
+        ops = read_ops_csv(str(p))
+        assert len(ops) == 1
+        assert ops[0]["endpoint"] == ""
+        assert ops[0]["status"] == "ok"
 
 
 class TestPercentile:

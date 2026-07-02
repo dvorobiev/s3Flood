@@ -13,8 +13,6 @@ import yaml
 
 from .defaults import DEFAULT_S3_PORT
 import questionary
-import csv
-import statistics
 from typing import Optional
 from urllib.parse import urlparse, urlunparse
 from prompt_toolkit import prompt as pt_prompt
@@ -928,95 +926,122 @@ def view_metrics_menu():
 
     metrics_path = cwd / choice
 
-    # Читаем CSV и считаем базовую статистику
-    ops = []
+    from .dashboard import sparkline
+    from .metrics import analyze_operations, read_ops_csv
+
     try:
-        with metrics_path.open("r", encoding="utf-8") as fh:
-            reader = csv.DictReader(fh)
-            for row in reader:
-                try:
-                    ts_start = float(row.get("ts_start", "0") or 0.0)
-                    ts_end = float(row.get("ts_end", "0") or 0.0)
-                    op = row.get("op") or ""
-                    bytes_v = int(row.get("bytes", "0") or 0)
-                    status = row.get("status") or ""
-                    latency_ms = float(row.get("latency_ms", "0") or 0.0)
-                    error = row.get("error") or ""
-                except ValueError:
-                    continue
-                duration_s = max(ts_end - ts_start, 0.0)
-                speed_MBps = (bytes_v / 1024 / 1024) / duration_s if duration_s > 0 else 0.0
-                ops.append(
-                    {
-                        "ts_start": ts_start,
-                        "ts_end": ts_end,
-                        "op": op,
-                        "bytes": bytes_v,
-                        "status": status,
-                        "latency_ms": latency_ms,
-                        "error": error,
-                        "duration_s": duration_s,
-                        "speed_MBps": speed_MBps,
-                    }
-                )
+        ops = read_ops_csv(str(metrics_path))
     except OSError as exc:
         console.print(f"[bold red]Не удалось прочитать файл метрик: {exc}[/bold red]")
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    if not ops:
+    r = analyze_operations(ops)
+    if r is None:
         console.print("[yellow]В файле не найдено ни одной операции.[/yellow]\n")
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    ts_min = min(o["ts_start"] for o in ops)
-    ts_max = max(o["ts_end"] for o in ops)
-    total_duration = max(ts_max - ts_min, 0.0)
+    def fmt_gb(nbytes):
+        return f"{nbytes / 1024**3:.2f} GB" if nbytes >= 1024**3 else f"{nbytes / 1024**2:.1f} MB"
 
-    ok_ops = [o for o in ops if o["status"] == "ok"]
-    err_ops = [o for o in ops if o["status"] != "ok"]
+    console.print(f"\n[bold]Файл метрик:[/bold] [cyan]{metrics_path.name}[/cyan]\n")
 
-    ok_bytes = sum(o["bytes"] for o in ok_ops)
+    # Сводка
+    err_style = "bold red" if r["err"] else "dim"
+    console.print(
+        f"операций [bold]{r['total']}[/bold] · OK {r['ok']} · "
+        f"[{err_style}]ошибок {r['err']}[/{err_style}] · {fmt_gb(r['ok_bytes'])} · "
+        f"{r['duration_s']:.1f} с · [bold cyan]{r['throughput_MBps']:.1f} MB/s[/bold cyan] сквозная"
+    )
+    sp = r["speed"]
+    console.print(
+        f"[dim]скорость операций, MB/s:[/dim] p50 {sp['median_speed_mbps']:.1f} · "
+        f"p90 {sp['p90_speed_mbps']:.1f} · max {sp['max_speed_mbps']:.1f}"
+    )
+    lat = r["latency"]
+    if lat:
+        console.print(
+            f"[dim]латентность, с:[/dim] p50 {lat['p50_ms']/1000:.1f} · "
+            f"p90 {lat['p90_ms']/1000:.1f} · p99 {lat['p99_ms']/1000:.1f} · "
+            f"max {lat['max_ms']/1000:.1f}"
+        )
 
-    speeds = [o["speed_MBps"] for o in ok_ops if o["speed_MBps"] > 0]
-    avg_speed = sum(speeds) / len(speeds) if speeds else 0.0
-    median_speed = statistics.median(speeds) if speeds else 0.0
-    p90_speed = statistics.quantiles(speeds, n=10)[-1] if len(speeds) >= 10 else 0.0
+    # RPS-профиль по времени
+    series = r["rps_series"]
+    if len(series) > 1:
+        console.print(f"\n[dim]операции/с по времени:[/dim] [cyan]{sparkline(series, width=60)}[/cyan] [dim]пик {max(series)}[/dim]")
 
-    console.print(f"\n[bold]Файл метрик:[/bold] [cyan]{metrics_path}[/cyan]\n")
-
-    summary = Table(show_header=False, box=None)
-    summary.add_column(style="cyan")
-    summary.add_column(style="white")
-    summary.add_row("Всего операций:", str(len(ops)))
-    summary.add_row("Успешных:", str(len(ok_ops)))
-    summary.add_row("С ошибкой:", str(len(err_ops)))
-    summary.add_row("Всего байт (успешные):", f"{ok_bytes / 1024 / 1024 / 1024:.2f} GB")
-    summary.add_row("Общая длительность:", f"{total_duration:.2f} s")
-    summary.add_row("Средняя скорость (по операциям):", f"{avg_speed:.1f} MB/s")
-    summary.add_row("Медиана по скорости:", f"{median_speed:.1f} MB/s")
-    summary.add_row("P90 по скорости:", f"{p90_speed:.1f} MB/s")
-    console.print(summary)
-
-    # Покажем топ-10 самых быстрых операций
-    top_n = 10
-    fast_ops = sorted(ok_ops, key=lambda o: o["speed_MBps"], reverse=True)[:top_n]
-    if fast_ops:
-        table = Table(title=f"Топ-{top_n} по скорости", box=None)
-        table.add_column("op", style="cyan")
-        table.add_column("size (GB)", justify="right")
-        table.add_column("duration (s)", justify="right")
-        table.add_column("speed (MB/s)", justify="right")
-        for o in fast_ops:
+    # По группам размеров
+    if len(r["size_buckets"]) > 1 or (r["size_buckets"] and r["size_buckets"][0]["label"] not in ("", None)):
+        table = Table(title="По размерам файлов", box=None, title_justify="left", title_style="bold")
+        table.add_column("группа", style="cyan")
+        table.add_column("ops", justify="right")
+        table.add_column("объём", justify="right")
+        table.add_column("p50 MB/s", justify="right")
+        table.add_column("p90 MB/s", justify="right")
+        table.add_column("p90 lat", justify="right")
+        for b in r["size_buckets"]:
+            blat = b.get("latency") or {}
             table.add_row(
-                o["op"],
-                f"{o['bytes'] / 1024 / 1024 / 1024:.2f}",
-                f"{o['duration_s']:.2f}",
-                f"{o['speed_MBps']:.1f}",
+                b["label"], str(b["count"]), fmt_gb(b["bytes"]),
+                f"{b['median_speed_mbps']:.1f}", f"{b['p90_speed_mbps']:.1f}",
+                f"{blat.get('p90_ms', 0)/1000:.1f} с" if blat else "—",
             )
         console.print()
         console.print(table)
 
+    # По endpoint (кластерный режим)
+    if len(r["by_endpoint"]) > 1:
+        table = Table(title="По endpoint", box=None, title_justify="left", title_style="bold")
+        table.add_column("endpoint", style="cyan")
+        table.add_column("ops", justify="right")
+        table.add_column("объём", justify="right")
+        table.add_column("p50 MB/s", justify="right")
+        for ep, e in sorted(r["by_endpoint"].items()):
+            table.add_row(ep, str(e["count"]), fmt_gb(e["bytes"]), f"{e['speed']['median_speed_mbps']:.1f}")
+        console.print()
+        console.print(table)
+
+    # Ошибки по типам
+    if r["errors"]:
+        table = Table(title="Ошибки", box=None, title_justify="left", title_style="bold")
+        table.add_column("тип", style="red")
+        table.add_column("количество", justify="right")
+        for err_type, count in sorted(r["errors"].items(), key=lambda kv: -kv[1]):
+            table.add_row(err_type, str(count))
+        console.print()
+        console.print(table)
+
+    if r["retries"] and r["retries"]["ops_with_retries"]:
+        console.print(
+            f"\n[yellow]повторы: {r['retries']['ops_with_retries']} операций "
+            f"со 2+ попытки (макс. {r['retries']['max_attempt']})[/yellow]"
+        )
+
+    # Топ медленных операций — с меткой времени от старта, чтобы можно было
+    # сопоставить просадку с событиями на стороне хранилища
+    ok_ops = [o for o in ops if o["status"] == "ok" and o["ts_end"] > o["ts_start"]]
+    if ok_ops:
+        ts0 = min(o["ts_start"] for o in ops)
+        slow = sorted(ok_ops, key=lambda o: (o["bytes"] / 1024 / 1024) / (o["ts_end"] - o["ts_start"]))[:5]
+        table = Table(title="Топ-5 медленных", box=None, title_justify="left", title_style="bold")
+        table.add_column("t+", justify="right", style="dim")
+        table.add_column("op", style="cyan")
+        table.add_column("размер", justify="right")
+        table.add_column("время", justify="right")
+        table.add_column("MB/s", justify="right")
+        for o in slow:
+            dur = o["ts_end"] - o["ts_start"]
+            speed = (o["bytes"] / 1024 / 1024) / dur
+            table.add_row(
+                f"{o['ts_start'] - ts0:.0f} с", o["op"], fmt_gb(o["bytes"]),
+                f"{dur:.1f} с", f"{speed:.1f}",
+            )
+        console.print()
+        console.print(table)
+
+    console.print()
     questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
 
 

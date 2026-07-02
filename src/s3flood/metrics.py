@@ -120,6 +120,150 @@ def build_timeline(ops, max_points: int = 300) -> list[dict]:
     return [buckets[k] for k in sorted(buckets)]
 
 
+def read_ops_csv(path: str) -> list[dict]:
+    """Читает metrics.csv (новый и старый формат) в список операций."""
+    ops: list[dict] = []
+    with open(path, encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            try:
+                op = {
+                    "ts_start": float(row.get("ts_start") or 0.0),
+                    "ts_end": float(row.get("ts_end") or 0.0),
+                    "op": row.get("op") or "",
+                    "bytes": int(row.get("bytes") or 0),
+                    "status": row.get("status") or "",
+                    "latency_ms": float(row.get("latency_ms") or 0.0),
+                    "error": row.get("error") or "",
+                    "endpoint": row.get("endpoint") or "",
+                    "attempt": row.get("attempt") or "",
+                    "size_group": row.get("size_group") or "",
+                }
+            except ValueError:
+                continue
+            ops.append(op)
+    return ops
+
+
+_AUTO_BUCKETS = [
+    (1024**2, "<1MB"),
+    (10 * 1024**2, "1–10MB"),
+    (100 * 1024**2, "10–100MB"),
+    (1024**3, "100MB–1GB"),
+    (float("inf"), "≥1GB"),
+]
+
+
+def _auto_bucket(nbytes: int) -> str:
+    for limit, label in _AUTO_BUCKETS:
+        if nbytes < limit:
+            return label
+    return _AUTO_BUCKETS[-1][1]
+
+
+def _op_speed_mbps(op: dict) -> float:
+    dur = max(op["ts_end"] - op["ts_start"], 0.0)
+    return (op["bytes"] / 1024 / 1024) / dur if dur > 0 else 0.0
+
+
+def analyze_operations(ops: list[dict]) -> dict | None:
+    """Сводная аналитика по операциям из metrics.csv (для просмотрщика метрик)."""
+    if not ops:
+        return None
+    ok_ops = [o for o in ops if o["status"] == "ok"]
+    err_ops = [o for o in ops if o["status"] != "ok"]
+    ok_bytes = sum(o["bytes"] for o in ok_ops)
+    ts_min = min(o["ts_start"] for o in ops)
+    ts_max = max(o["ts_end"] for o in ops)
+    duration = max(ts_max - ts_min, 1e-6)
+
+    result: dict = {
+        "total": len(ops),
+        "ok": len(ok_ops),
+        "err": len(err_ops),
+        "ok_bytes": ok_bytes,
+        "duration_s": duration,
+        "throughput_MBps": ok_bytes / 1024 / 1024 / duration,
+        "speed": summarize_speeds([_op_speed_mbps(o) for o in ok_ops if _op_speed_mbps(o) > 0]),
+        "latency": summarize_latencies([o["latency_ms"] for o in ok_ops]),
+    }
+
+    # по типу операции
+    by_op: dict[str, dict] = {}
+    for o in ok_ops:
+        agg = by_op.setdefault(o["op"], {"count": 0, "bytes": 0, "latencies": [], "speeds": []})
+        agg["count"] += 1
+        agg["bytes"] += o["bytes"]
+        agg["latencies"].append(o["latency_ms"])
+        speed = _op_speed_mbps(o)
+        if speed > 0:
+            agg["speeds"].append(speed)
+    for agg in by_op.values():
+        agg["latency"] = summarize_latencies(agg.pop("latencies"))
+        agg["speed"] = summarize_speeds(agg.pop("speeds"))
+    result["by_op"] = by_op
+
+    # по группам размеров (size_group из CSV или авто-бакеты)
+    buckets: dict[str, dict] = {}
+    for o in ok_ops:
+        label = o.get("size_group") or _auto_bucket(o["bytes"])
+        b = buckets.setdefault(label, {"count": 0, "bytes": 0, "speeds": [], "latencies": []})
+        b["count"] += 1
+        b["bytes"] += o["bytes"]
+        speed = _op_speed_mbps(o)
+        if speed > 0:
+            b["speeds"].append(speed)
+        b["latencies"].append(o["latency_ms"])
+    size_buckets = []
+    for label, b in sorted(buckets.items(), key=lambda kv: min(
+            (o["bytes"] for o in ok_ops if (o.get("size_group") or _auto_bucket(o["bytes"])) == kv[0]),
+            default=0)):
+        entry = {"label": label, "count": b["count"], "bytes": b["bytes"]}
+        entry.update(summarize_speeds(b["speeds"]))
+        entry["latency"] = summarize_latencies(b["latencies"])
+        size_buckets.append(entry)
+    result["size_buckets"] = size_buckets
+
+    # по endpoint (для кластерного режима)
+    by_endpoint: dict[str, dict] = {}
+    for o in ok_ops:
+        if not o.get("endpoint"):
+            continue
+        e = by_endpoint.setdefault(o["endpoint"], {"count": 0, "bytes": 0, "speeds": []})
+        e["count"] += 1
+        e["bytes"] += o["bytes"]
+        speed = _op_speed_mbps(o)
+        if speed > 0:
+            e["speeds"].append(speed)
+    for e in by_endpoint.values():
+        e["speed"] = summarize_speeds(e.pop("speeds"))
+    result["by_endpoint"] = by_endpoint
+
+    # ошибки по типам
+    errors: dict[str, int] = {}
+    for o in err_ops:
+        err_type = classify_error(o.get("error"))
+        errors[err_type] = errors.get(err_type, 0) + 1
+    result["errors"] = errors
+
+    # повторы
+    attempts = [int(o["attempt"]) for o in ops if str(o.get("attempt") or "").isdigit()]
+    if attempts:
+        result["retries"] = {
+            "ops_with_retries": sum(1 for a in attempts if a > 1),
+            "max_attempt": max(attempts),
+        }
+    else:
+        result["retries"] = None
+
+    # посекундная серия для спарклайна RPS
+    tuples = [(o["op"], o["ts_start"], o["ts_end"], o["bytes"], o["status"] == "ok", o["latency_ms"])
+              for o in ops]
+    timeline = build_timeline(tuples)
+    result["rps_series"] = [b["write_ops"] + b["read_ops"] + b["err_ops"] for b in timeline]
+
+    return result
+
+
 class RateWindow:
     """Скользящее окно операций для расчёта RPS/пропускной способности.
 
