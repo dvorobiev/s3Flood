@@ -1135,34 +1135,13 @@ def run_profile(args):
                     stop=stop,
                 )
                 end = time.time()
-                # Детальная диагностика для отладки
-                if not ok:
-                    debug_info = []
+                if not ok and not err:
                     if res is None:
-                        debug_info.append("res=None")
-                        err = err or "retry failed: no result"
+                        err = "retry failed: no result"
+                    elif getattr(res, "stderr", None):
+                        err = res.stderr[-300:]
                     else:
-                        debug_info.append(f"res_type={type(res)}")
-                        if hasattr(res, 'returncode'):
-                            debug_info.append(f"returncode={res.returncode}")
-                            if res.returncode != 0:
-                                err_parts = [f"exit_code={res.returncode}"]
-                                if hasattr(res, 'stderr') and res.stderr:
-                                    stderr_snippet = res.stderr[-300:] if len(res.stderr) > 300 else res.stderr
-                                    err_parts.append(f"stderr={stderr_snippet}")
-                                    debug_info.append(f"stderr_len={len(res.stderr)}")
-                                if hasattr(res, 'stdout') and res.stdout:
-                                    stdout_snippet = res.stdout[-200:] if len(res.stdout) > 200 else res.stdout
-                                    err_parts.append(f"stdout={stdout_snippet}")
-                                    debug_info.append(f"stdout_len={len(res.stdout)}")
-                                err = err or ("; ".join(err_parts) if err_parts else "unknown error")
-                            else:
-                                # returncode == 0, но ok == False - это странно, логируем
-                                debug_info.append("WARNING: returncode=0 but ok=False")
-                                err = err or f"unexpected: returncode=0 but marked as failed; debug: {'; '.join(debug_info)}"
-                        else:
-                            debug_info.append("no returncode attribute")
-                            err = err or f"unexpected result type: {type(res)}; debug: {'; '.join(debug_info)}"
+                        err = f"exit code {getattr(res, 'returncode', '?')}"
                 # Для download используем размер из job.size (известен из списка объектов)
                 # aws s3 cp не возвращает JSON с размером, в отличие от s3api get-object
                 nbytes = job.size
@@ -1204,9 +1183,16 @@ def run_profile(args):
             threads.append(t)
 
     last_print = 0
-    first_frame = True
+    last_plain_log = 0.0
     download_phase_started = False
     mixed_phase_started = False
+
+    from rich.console import Console as _RichConsole
+    from rich.live import Live as _RichLive
+    from .dashboard import build_dashboard
+    _console = _RichConsole()
+    # Живой дашборд только в терминале; в CI/пайпе — краткая строка раз в 5 с
+    live = _RichLive(console=_console, auto_refresh=False, transient=False) if _console.is_terminal else None
     # Для read профиля используем key из path, для других - path.name
     if profile == "read":
         key_to_job = {str(job.path): job for job in jobs}  # path содержит key объекта
@@ -1265,6 +1251,8 @@ def run_profile(args):
                 burst_active = False
     
     try:
+        if live is not None:
+            live.start()
         while any(t.is_alive() for t in threads):
             time.sleep(0.5)
             now = time.time()
@@ -1422,192 +1410,70 @@ def run_profile(args):
                         eta_sec = (total_bytes - bytes_done) / wbps
                 eta_str = f"{eta_sec/60:.1f} min" if eta_sec and eta_sec > 60 else (f"{eta_sec:.0f} s" if eta_sec else "n/a")
                 
-                plain_lines: list[str] = []
-                styled_lines: list[tuple[str, tuple[str, ...], bool]] = []
-                pattern_info = f" [{pattern.upper()}]" if pattern == "bursty" and burst_active else ""
-                with cycle_lock:
-                    cycle_info = f" | cycle {cycle_count}" if getattr(args, "infinite", False) else ""
-                # Спиннер крутится всегда, пока программа работает (пока есть потоки или задачи)
-                spinner = get_spinner()  # Всегда крутится, пока программа работает (уже с цветом и пробелом)
-                header_text = f"S3Flood | {profile} | t={elapsed:6.1f}s | ETA {eta_str}{pattern_info}{cycle_info}"
-                header_plain = f"{spinner}{header_text}"  # Пробел уже в спиннере
-                header_styled = f"{spinner}{style(header_text, ANSI_BOLD, ANSI_CYAN)}"  # Пробел уже в спиннере
-                plain_lines.append(header_plain)
-                styled_lines.append((header_styled, (), False))  # Используем стилизованную версию, спиннер уже имеет цвет
-                # Для фазы чтения или mixed: учитываем активные операции и pending
-                if profile == "read":
-                    # Для read профиля показываем только чтение
-                    phase_info = " [READ]"
-                    if getattr(args, "infinite", False):
-                        # В бесконечном режиме показываем общее количество прочитанных объектов
-                        r_part = f"R:{files_read} objects read"
-                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                        err_part = f"Err {files_err}"
-                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part} | Total in bucket: {total_files}"
-                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part} | Total in bucket: {total_files}"
-                    else:
-                        files_in_progress_read = files_read + active_downloads_snap
-                        read_pct = (files_in_progress_read / total_files * 100) if total_files > 0 else 0.0
-                        r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                        err_part = f"Err {files_err}"
-                        files_line = f"Files {r_part}{phase_info} | Bytes {r_bytes_part} | {err_part}"
-                        files_line_styled = f"Files {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
-                    files_color = ()  # Без общего цвета строки
-                elif download_phase_started or mixed_phase_started:
-                    with uploaded_objects_lock:
-                        total_to_read = len(uploaded_objects)
-                    files_in_progress_read = files_read + active_downloads_snap
-                    read_pct = (files_in_progress_read / total_to_read * 100) if total_to_read > 0 else 0.0
-                    if mixed_phase_started:
-                        phase_info = " [MIXED]"
-                    else:
-                        phase_info = " [READ]"
-                    # В фазе чтения/mixed: подсвечиваем данные чтения (R:) зелёным, W: без стилей
-                    # Разделяем на части для цветового выделения
-                    w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
-                    r_part = f"R:{files_read}/{total_to_read} ({read_pct:.1f}%)"
-                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
-                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                    err_part = f"Err {files_err}"
-                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
-                    # Создаём стилизованную версию: подсвечиваем R: зелёным, W: без стилей, ошибки красным
-                    files_line_styled = f"Files {w_part} {style(r_part, ANSI_BOLD, ANSI_GREEN)}{phase_info} | Bytes {w_bytes_part} {style(r_bytes_part, ANSI_BOLD, ANSI_GREEN)} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
-                    files_color = ()  # Без общего цвета строки
+                # Определяем фазу для отображения
+                if profile == "read" or download_phase_started:
+                    phase = "READ"
+                elif mixed_phase_started:
+                    phase = "MIXED"
                 else:
-                    read_pct = 0.0
-                    phase_info = " [WRITE]"
-                    # В фазе записи: подсвечиваем данные записи (W:) зелёным, R: без стилей
-                    if getattr(args, "infinite", False):
-                        # В бесконечном режиме показываем файлы в текущем цикле и общее количество
-                        with cycle_files_lock:
-                            current_cycle_files = files_in_current_cycle
-                        w_part = f"W:{current_cycle_files}/{total_files} (cycle) | total: {files_done}"
-                        r_part = f"R:{files_read}"
-                        w_bytes_part = f"W:{format_bytes(bytes_done)}"
-                        r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                        err_part = f"Err {files_err}"
-                        files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
-                        files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
-                    else:
-                        w_part = f"W:{files_done}/{total_files} ({pct_files:.1f}%)"
-                    r_part = f"R:{files_read}/{total_files} ({read_pct:.1f}%)"
-                    w_bytes_part = f"W:{format_bytes(bytes_done)}"
-                    r_bytes_part = f"R:{format_bytes(bytes_read)}"
-                    err_part = f"Err {files_err}"
-                    files_line = f"Files {w_part} {r_part}{phase_info} | Bytes {w_bytes_part} {r_bytes_part} | {err_part}"
-                    files_line_styled = f"Files {style(w_part, ANSI_BOLD, ANSI_GREEN)} {r_part}{phase_info} | Bytes {style(w_bytes_part, ANSI_BOLD, ANSI_GREEN)} {r_bytes_part} | {style(err_part, ANSI_RED) if files_err > 0 else err_part}"
-                    files_color = ()  # Без общего цвета строки
-                plain_lines.append(files_line)
-                styled_lines.append((files_line_styled, files_color, False))
-                
-                # Для BURSTY режима показываем эффективное количество потоков
+                    phase = "WRITE"
                 effective_threads = args.threads
                 if pattern == "bursty" and burst_active:
                     effective_threads = int(args.threads * burst_intensity_multiplier)
-                
-                if profile == "read":
-                    rps_part = f"R-RPS {read_rps:.2f}"
-                elif profile == "write":
-                    rps_part = f"W-RPS {write_rps:.2f}"
-                else:
-                    rps_part = f"W-RPS {write_rps:.2f} | R-RPS {read_rps:.2f}"
-                load_line = f"Load active {inflight}/{effective_threads} (U:{active_uploads_snap} D:{active_downloads_snap}) | queue {pending} tasks | {rps_part}"
-                plain_lines.append(load_line)
-                styled_lines.append((load_line, (ANSI_BLUE,), False))
-                
-                # Цветовое выделение для rates
-                if profile == "read":
-                    # Для read профиля показываем только чтение
-                    r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
-                    rate_line_plain = f"Rates {r_rates_part}"
-                    rate_line_styled = f"Rates {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)}"
-                elif download_phase_started or mixed_phase_started:
-                    # В фазе чтения/mixed: подсвечиваем R: зелёным, W: без стилей (или оба, если mixed)
-                    w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
-                    r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
-                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part}"
-                    if mixed_phase_started:
-                        # В mixed фазе подсвечиваем оба
-                        rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_YELLOW)} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)}"
-                    else:
-                        rate_line_styled = f"Rates {w_rates_part} | {style(r_rates_part, ANSI_BOLD, ANSI_GREEN)}"
-                else:
-                    # В фазе записи: подсвечиваем W: зелёным, R: без стилей
-                    w_rates_part = f"W:cur {wbps_mb:6.1f} MB/s avg {avg_wbps_mb:6.1f} MB/s"
-                    r_rates_part = f"R:cur {rbps_mb:6.1f} MB/s avg {avg_rbps_mb:6.1f} MB/s"
-                    rate_line_plain = f"Rates {w_rates_part} | {r_rates_part}"
-                    rate_line_styled = f"Rates {style(w_rates_part, ANSI_BOLD, ANSI_GREEN)} | {r_rates_part}"
-                plain_lines.append(rate_line_plain)
-                styled_lines.append((rate_line_styled, (ANSI_BOLD, ANSI_CYAN), True))
-
-                # История последних операций
+                with uploaded_objects_lock:
+                    total_to_read = len(uploaded_objects)
+                with cycle_lock:
+                    cycle_snapshot = cycle_count
+                with cycle_files_lock:
+                    current_cycle_files = files_in_current_cycle
                 recent_per_type = max(1, min(getattr(args, "threads", 1), 15))
-                history_depth = max(recent_per_type * 4, recent_per_type * 2)
-                recent_ops_snapshot = metrics.get_recent_ops(history_depth)
-                done_ops = [entry for entry in recent_ops_snapshot if entry.get("done")]
-                active_ops = [entry for entry in recent_ops_snapshot if not entry.get("done")]
-                done_section = done_ops[-recent_per_type:]
-                active_section = active_ops[-recent_per_type:]
-                display_ops = done_section + active_section
-                if display_ops:
-                    recent_header = "Recent ops (latest bottom):"
-                    plain_lines.append(recent_header)
-                    styled_lines.append((recent_header, (ANSI_BOLD, ANSI_BLUE), False))
-                    for entry in display_ops:
-                        icon = WRITE_ICON if entry["op"] == "upload" else READ_ICON
-                        filename_disp = shorten_middle(entry["filename"], 32)
-                        size_bytes = entry.get("bytes") or 0
-                        size_gb = size_bytes / (1024 ** 3)
-                        size_disp = f"{size_gb:6.2f} GB"
-                        if entry.get("done"):
-                            latency_ms = entry.get("latency_ms") or 0
-                            latency_s = latency_ms / 1000
-                            time_disp = f"{latency_s:7.2f} s"
-                            speed_val = entry.get("speed_mbps")
-                            if speed_val is not None:
-                                speed_disp = f"{speed_val:7.1f} MB/s"
-                            else:
-                                speed_disp = f"{'--':>7} MB/s"
-                        else:
-                            elapsed_s = max(now - entry.get("started", now), 0.0)
-                            time_disp = f"{elapsed_s:7.2f} s"
-                            speed_disp = f"{'--':>7} MB/s"
-                        line_plain = f"  {icon} {filename_disp:<32} {size_disp} {time_disp} {speed_disp}"
-                        color = (ANSI_BOLD, ANSI_GREEN) if entry["op"] == "upload" else (ANSI_BOLD, ANSI_CYAN)
-                        plain_lines.append(line_plain)
-                        styled_lines.append((line_plain, color, False))
-                
-                content_width = max(visible_len(line) for line in plain_lines) if plain_lines else 0
-                border = "+" + "-" * (content_width + 2) + "+"
-                speed_border = "|" + style("=" * (content_width + 2), ANSI_BOLD, ANSI_CYAN) + "|"
-                render_lines = [border]
-                
-                for plain, codes, accent in styled_lines:
-                    if accent:
-                        render_lines.append(speed_border)
-                    colored = style(plain, *codes) if codes else plain
-                    padding = " " * (content_width - visible_len(plain))
-                    render_lines.append(f"| {colored}{padding} |")
-                    if accent:
-                        render_lines.append(speed_border)
-                
-                render_lines.append(border)
-                table_height = len(render_lines)
-                if first_frame:
-                    first_frame = False
-                else:
-                    if USE_COLORS:
-                        sys.stdout.write(f"\x1b[{table_height}A")
-                    else:
-                        # На Windows без поддержки ANSI просто выводим разделитель
-                        sys.stdout.write("\n" + "=" * 100 + "\n")
-                for line in render_lines:
-                    if USE_COLORS:
-                        sys.stdout.write("\x1b[2K")
-                    # После очистки строки выводим актуальное содержимое и перенос
-                    sys.stdout.write(line + "\n")
-                sys.stdout.flush()
+                recent_ops_snapshot = metrics.get_recent_ops(recent_per_type * 4)
+                done_ops = [e for e in recent_ops_snapshot if e.get("done")]
+                active_ops = [e for e in recent_ops_snapshot if not e.get("done")]
+                display_ops = done_ops[-recent_per_type:] + active_ops[-recent_per_type:]
+                state = {
+                    "profile": profile,
+                    "pattern": pattern,
+                    "burst_active": burst_active,
+                    "infinite": bool(getattr(args, "infinite", False)),
+                    "cycle_count": cycle_snapshot,
+                    "elapsed": elapsed,
+                    "eta": eta_str if eta_sec else None,
+                    "phase": phase,
+                    "warmup_active": warmup_sec > 0 and now < metrics.warmup_until,
+                    "total_files": total_files,
+                    "files_done": files_done,
+                    "files_read": files_read,
+                    "files_err": files_err,
+                    "total_to_read": total_to_read,
+                    "current_cycle_files": current_cycle_files,
+                    "bytes_done": bytes_done,
+                    "bytes_read": bytes_read,
+                    "total_bytes": total_bytes,
+                    "write_rps": write_rps,
+                    "read_rps": read_rps,
+                    "wbps_mb": wbps_mb,
+                    "rbps_mb": rbps_mb,
+                    "avg_wbps_mb": avg_wbps_mb,
+                    "avg_rbps_mb": avg_rbps_mb,
+                    "inflight": inflight,
+                    "threads": effective_threads,
+                    "active_uploads": active_uploads_snap,
+                    "active_downloads": active_downloads_snap,
+                    "queue": pending,
+                    "recent_ops": display_ops,
+                    "now": now,
+                }
+                if live is not None:
+                    live.update(build_dashboard(state), refresh=True)
+                elif now - last_plain_log >= 5.0:
+                    print(
+                        f"[{elapsed:7.1f}s] {phase} W:{files_done}/{total_files} R:{files_read} "
+                        f"Err:{files_err} W-RPS:{write_rps:.2f} R-RPS:{read_rps:.2f} "
+                        f"Wcur:{wbps_mb:.1f}MB/s Rcur:{rbps_mb:.1f}MB/s queue:{pending}",
+                        flush=True,
+                    )
+                    last_plain_log = now
                 last_print = now
     except KeyboardInterrupt:
         # Если KeyboardInterrupt все еще произошел (например, если обработчик сигнала не сработал)
@@ -1615,6 +1481,9 @@ def run_profile(args):
             print("\n[Получен сигнал прерывания, завершаем процессы...]", flush=True)
             stop.set()
             _terminate_all_processes()
+    finally:
+        if live is not None:
+            live.stop()
 
     # Восстанавливаем оригинальный обработчик сигнала
     if threading.current_thread() is threading.main_thread() and original_sigint is not None:

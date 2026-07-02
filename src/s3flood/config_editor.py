@@ -15,6 +15,8 @@ from prompt_toolkit.layout.dimension import Dimension
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import TextArea
 
+from .defaults import DEFAULT_ENDPOINT, DEFAULT_S3_PORT
+
 
 def _validate_size(value: str) -> bool:
     if value is None:
@@ -49,7 +51,7 @@ def _normalize_endpoint(value: Optional[str]) -> Optional[str]:
         text = f"http://{text}"
     scheme, rest = text.split("://", 1)
     if ":" not in rest:
-        rest = f"{rest}:9080"
+        rest = f"{rest}:{DEFAULT_S3_PORT}"
     return f"{scheme}://{rest}"
 
 
@@ -116,7 +118,7 @@ def build_default_config() -> Dict[str, Any]:
         "client": "awscli",
         "bucket": "your-bucket-name",
         # По умолчанию ориентируемся на MinIO/S3 endpoint на 9080 порту
-        "endpoint": "http://127.0.0.1:9080",
+        "endpoint": DEFAULT_ENDPOINT,
         "endpoints": [],
         "endpoint_mode": "round-robin",
         "access_key": None,
@@ -475,7 +477,7 @@ class ConfigEditorApp:
             self.state["endpoint_mode"] = None
             self.message = "Переключено на одиночный endpoint."
         else:
-            base = self.state.get("endpoint") or "http://localhost:9000:9080"
+            base = self.state.get("endpoint") or DEFAULT_ENDPOINT
             self.state["endpoints"] = [_normalize_endpoint(base) or base]
             self.state["endpoint"] = None
             if not self.state.get("endpoint_mode"):
@@ -496,7 +498,7 @@ class ConfigEditorApp:
         if not result.get("endpoints"):
             result["endpoints"] = None
             if not result.get("endpoint"):
-                result["endpoint"] = "http://localhost:9000:9080"
+                result["endpoint"] = DEFAULT_ENDPOINT
         if not result.get("endpoint_mode"):
             result["endpoint_mode"] = None
         return result

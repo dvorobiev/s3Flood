@@ -14,6 +14,8 @@ import sys
 import time
 import threading
 import yaml
+
+from .defaults import DEFAULT_S3_PORT
 import questionary
 import shutil
 import csv
@@ -136,7 +138,7 @@ def normalize_endpoint_url(value: str) -> str:
     netloc = parsed.netloc or parsed.path
     path = parsed.path if parsed.netloc else ""
     if ":" not in netloc:
-        netloc = f"{netloc}:9080"
+        netloc = f"{netloc}:{DEFAULT_S3_PORT}"
     parsed = parsed._replace(
         scheme=parsed.scheme or "http",
         netloc=netloc,
