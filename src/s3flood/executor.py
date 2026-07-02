@@ -1,7 +1,9 @@
-import json, time, queue, threading, subprocess, os, csv, statistics, sys, re, random, math, uuid, signal, inspect
+import json, time, queue, threading, subprocess, os, sys, re, random, math, uuid, signal, inspect
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass
+
+from .metrics import MetricsCsvWriter, RateWindow, summarize_latencies, summarize_speeds
 
 # Minimal executor with AWS CLI runner only (v1)
 
@@ -185,26 +187,29 @@ def _ensure_custom_aws_config(
 
 
 class Metrics:
-    def __init__(self, metrics_csv: str, report_json: str):
+    def __init__(self, metrics_csv: str, report_json: str, warmup_sec: float = 0.0):
         self.csv_path = metrics_csv
         self.json_path = report_json
         self._lock = threading.Lock()
-        self.ops = []  # per-op dicts
-        self.window = deque(maxlen=400)
+        self.ops = []  # per-op tuples: (op, start, end, nbytes, ok, lat_ms)
+        self.window = RateWindow()
+        self._writer = MetricsCsvWriter(metrics_csv)
         self._start = time.time()
+        self.warmup_until = self._start + max(warmup_sec or 0.0, 0.0)
+        self.warmup_ops = 0
+        self.client_overhead_ms: float | None = None
         self.read_bytes = 0
         self.write_bytes = 0
         self.read_ops_ok = 0
         self.write_ops_ok = 0
         self.err_ops = 0
+        self.write_latencies_ms: list[int] = []
+        self.read_latencies_ms: list[int] = []
         self.last_upload = None
         self.last_download = None
         self.recent_ops = deque(maxlen=30)  # Буфер последних операций для дашборда
         self._active_recent_ops: dict[int, dict] = {}
         self._op_counter = 0
-        with open(self.csv_path, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=["ts_start","ts_end","op","bytes","status","latency_ms","error"])
-            w.writeheader()
 
     def start_recent_op(self, op: str, filename: str, nbytes: int, started: float) -> int:
         """Регистрирует операцию в списке Recent ops ещё до завершения."""
@@ -236,17 +241,30 @@ class Metrics:
     def avg_read_rate(self) -> float:
         return self.read_bytes / self.elapsed()
 
-    def record(self, op: str, start: float, end: float, nbytes: int, ok: bool, err: str|None, filename: str|None = None, recent_id: int | None = None):
+    def record(
+        self, op: str, start: float, end: float, nbytes: int, ok: bool, err: str | None,
+        filename: str | None = None, recent_id: int | None = None,
+        endpoint: str | None = None, thread_id: int | None = None,
+        attempt: int | None = None, size_group: str | None = None,
+    ):
         lat_ms = int((end-start)*1000)
+        is_warmup = self.warmup_until > self._start and end < self.warmup_until
+        self._writer.write_row(
+            ts_start=start, ts_end=end, op=op, nbytes=nbytes, ok=ok,
+            latency_ms=lat_ms, error=err, endpoint=endpoint,
+            thread_id=thread_id, attempt=attempt, size_group=size_group,
+        )
         with self._lock:
-            with open(self.csv_path, "a", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=["ts_start","ts_end","op","bytes","status","latency_ms","error"])
-                w.writerow({
-                    "ts_start": start, "ts_end": end, "op": op, "bytes": nbytes,
-                    "status": "ok" if ok else "err", "latency_ms": lat_ms, "error": err or ""
-                })
-            self.ops.append((op, start, end, nbytes, ok, lat_ms))
-            self.window.append((end, op, nbytes, ok, lat_ms))
+            if not is_warmup:
+                self.ops.append((op, start, end, nbytes, ok, lat_ms))
+                self.window.add(ts=end, op=op, nbytes=nbytes, ok=ok)
+                if ok:
+                    if op == "download":
+                        self.read_latencies_ms.append(lat_ms)
+                    elif op == "upload":
+                        self.write_latencies_ms.append(lat_ms)
+            else:
+                self.warmup_ops += 1
             entry = None
             if recent_id is not None:
                 entry = self._active_recent_ops.pop(recent_id, None)
@@ -275,6 +293,8 @@ class Metrics:
                 else:
                     entry["speed_mbps"] = None
 
+            if is_warmup:
+                return
             if ok:
                 if op == "download":
                     self.read_ops_ok += 1
@@ -293,19 +313,7 @@ class Metrics:
             return list(self.recent_ops)[-count:]
 
     def current_rates(self, window_sec=5.0):
-        now = time.time()
-        rb = wb = 0
-        read_ops = write_ops = 0
-        for t, op, nbytes, ok, lat_ms in list(self.window):
-            if now - t <= window_sec and ok:
-                if op == "download":
-                    rb += nbytes
-                    read_ops += 1
-                elif op == "upload":
-                    wb += nbytes
-                    write_ops += 1
-        w = window_sec if window_sec > 0 else 1.0
-        return rb/w, wb/w, write_ops/w, read_ops/w
+        return self.window.rates(window_sec)
 
     def last_latency_ms(self, op: str) -> float | None:
         data = self.last_download if op == "download" else self.last_upload
@@ -329,122 +337,77 @@ class Metrics:
         
         if not file_stats:
             return None, None, None
-        
-        # Сортируем по размеру
+
+        # ТОП10 маленьких/больших по уникальному размеру файла
         sorted_by_size = sorted(file_stats.items(), key=lambda x: x[0])
-        
-        # ТОП10 маленьких - берем первые 10 самых маленьких
-        # ТОП10 больших - берем последние 10 самых больших
-        # Если уникальных размеров меньше 10, разделяем пополам
         total_unique_sizes = len(sorted_by_size)
         if total_unique_sizes <= 1:
-            # Если только один размер, оба списка одинаковые
             top10_small = sorted_by_size
             top10_large = sorted_by_size
         elif total_unique_sizes <= 10:
-            # Если размеров <= 10, разделяем пополам (маленькие и большие)
             mid = total_unique_sizes // 2
             top10_small = sorted_by_size[:mid] if mid > 0 else sorted_by_size[:1]
             top10_large = sorted_by_size[mid:] if mid < total_unique_sizes else sorted_by_size[-1:]
         else:
-            # Если размеров > 10, берем первые 10 и последние 10
             top10_small = sorted_by_size[:10]
             top10_large = sorted_by_size[-10:]
-        
-        small_stats = []
-        for size_bytes, stats in top10_small:
-            speeds = stats["speeds"]
-            if speeds:
-                avg_speed = statistics.mean(speeds)
-                median_speed = statistics.median(speeds)
-                min_speed = min(speeds)
-                max_speed = max(speeds)
-                sorted_speeds = sorted(speeds)
-                p90_idx = max(int(len(sorted_speeds) * 0.9) - 1, 0)
-                p95_idx = max(int(len(sorted_speeds) * 0.95) - 1, 0)
-                p90_speed = sorted_speeds[p90_idx]
-                p95_speed = sorted_speeds[p95_idx]
-            else:
-                avg_speed = median_speed = min_speed = max_speed = p90_speed = p95_speed = 0.0
-            small_stats.append((size_bytes, stats["count"], avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed))
-        
-        large_stats = []
-        for size_bytes, stats in top10_large:
-            speeds = stats["speeds"]
-            if speeds:
-                avg_speed = statistics.mean(speeds)
-                median_speed = statistics.median(speeds)
-                min_speed = min(speeds)
-                max_speed = max(speeds)
-                sorted_speeds = sorted(speeds)
-                p90_idx = max(int(len(sorted_speeds) * 0.9) - 1, 0)
-                p95_idx = max(int(len(sorted_speeds) * 0.95) - 1, 0)
-                p90_speed = sorted_speeds[p90_idx]
-                p95_speed = sorted_speeds[p95_idx]
-            else:
-                avg_speed = median_speed = min_speed = max_speed = p90_speed = p95_speed = 0.0
-            large_stats.append((size_bytes, stats["count"], avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed))
-        
-        # Средняя скорость по всем файлам
+
+        def size_entry(size_bytes, stats):
+            entry = {"size_bytes": size_bytes, "count": stats["count"]}
+            entry.update(summarize_speeds(stats["speeds"]))
+            return entry
+
+        small_stats = [size_entry(size, st) for size, st in top10_small]
+        large_stats = [size_entry(size, st) for size, st in top10_large]
+
         all_speeds = []
         for stats in file_stats.values():
             all_speeds.extend(stats["speeds"])
-        
-        if all_speeds:
-            avg_speed_all = statistics.mean(all_speeds)
-            median_speed_all = statistics.median(all_speeds)
-            min_speed_all = min(all_speeds)
-            max_speed_all = max(all_speeds)
-            sorted_all_speeds = sorted(all_speeds)
-            p90_idx = max(int(len(sorted_all_speeds) * 0.9) - 1, 0)
-            p95_idx = max(int(len(sorted_all_speeds) * 0.95) - 1, 0)
-            p90_speed_all = sorted_all_speeds[p90_idx]
-            p95_speed_all = sorted_all_speeds[p95_idx]
-        else:
-            avg_speed_all = median_speed_all = min_speed_all = max_speed_all = p90_speed_all = p95_speed_all = 0.0
-        
-        return small_stats, large_stats, (avg_speed_all, median_speed_all, min_speed_all, max_speed_all, p90_speed_all, p95_speed_all)
+        overall = summarize_speeds(all_speeds)
+
+        return small_stats, large_stats, overall
+
+    def close(self):
+        self._writer.close()
 
     def finalize(self):
-        dur = max(time.time() - self._start, 1e-6)
-        
-        # Вычисляем реальное время выполнения для каждой фазы
-        # Для write и read профилей - одна фаза (только запись или только чтение)
-        # Для смешанных фаз (mixed) операции могут идти параллельно, используем общее время
+        now = time.time()
+        wall_clock = max(now - self._start, 1e-6)
+
+        # Активная длительность — по временным меткам операций, а не wall clock:
+        # при простоях/паузах wall clock многократно завышал длительность прогона
         write_duration = 0.0
         read_duration = 0.0
-        
+        active_duration = 0.0
+
         if self.ops:
-            # Находим первое и последнее время для каждой операции (только успешные)
-            write_ops = [op for op in self.ops if op[0] == "upload" and op[4]]  # op, start, end, nbytes, ok, lat_ms
-            read_ops = [op for op in self.ops if op[0] == "download" and op[4]]
-            
+            ok_ops = [op for op in self.ops if op[4]]  # (op, start, end, nbytes, ok, lat_ms)
+            span_ops = ok_ops or self.ops
+            active_duration = max(
+                max(op[2] for op in span_ops) - min(op[1] for op in span_ops), 1e-6
+            )
+            write_ops = [op for op in ok_ops if op[0] == "upload"]
+            read_ops = [op for op in ok_ops if op[0] == "download"]
             if write_ops:
-                write_start = min(op[1] for op in write_ops)  # start time
-                write_end = max(op[2] for op in write_ops)    # end time
-                write_duration = max(write_end - write_start, 1e-6)
-            
+                write_duration = max(
+                    max(op[2] for op in write_ops) - min(op[1] for op in write_ops), 1e-6
+                )
             if read_ops:
-                read_start = min(op[1] for op in read_ops)    # start time
-                read_end = max(op[2] for op in read_ops)      # end time
-                read_duration = max(read_end - read_start, 1e-6)
-        
-        # Если не удалось вычислить по операциям, используем общее время
+                read_duration = max(
+                    max(op[2] for op in read_ops) - min(op[1] for op in read_ops), 1e-6
+                )
+
         if write_duration == 0.0 and self.write_bytes > 0:
-            write_duration = dur
+            write_duration = wall_clock
         if read_duration == 0.0 and self.read_bytes > 0:
-            read_duration = dur
-        
-        # Вычисляем средние скорости на основе реального времени каждой фазы
+            read_duration = wall_clock
+
         write_MBps_avg = (self.write_bytes / 1024 / 1024 / write_duration) if write_duration > 0 else 0.0
         read_MBps_avg = (self.read_bytes / 1024 / 1024 / read_duration) if read_duration > 0 else 0.0
-        
-        # Получаем аналитику по файлам
-        write_analysis = self.get_file_stats("upload")
-        read_analysis = self.get_file_stats("download")
-        
+
         out = {
-            "duration_sec": dur,
+            "duration_sec": active_duration if active_duration > 0 else wall_clock,
+            "wall_clock_sec": wall_clock,
             "write_bytes": self.write_bytes,
             "read_bytes": self.read_bytes,
             "write_duration_sec": write_duration,
@@ -454,91 +417,32 @@ class Metrics:
             "read_ok_ops": self.read_ops_ok,
             "write_ok_ops": self.write_ops_ok,
             "err_ops": self.err_ops,
+            "warmup_ops": self.warmup_ops,
         }
-        
-        # Добавляем аналитику по файлам
-        if write_analysis[0] or write_analysis[1]:  # Есть статистика по записи
-            small_stats, large_stats, speed_stats = write_analysis
-            avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed = speed_stats
-            write_file_analysis = {
-                "top10_small": [
-                    {
-                        "size_bytes": s[0],
-                        "count": s[1],
-                        "avg_speed_mbps": s[2],
-                        "median_speed_mbps": s[3],
-                        "min_speed_mbps": s[4],
-                        "max_speed_mbps": s[5],
-                        "p90_speed_mbps": s[6],
-                        "p95_speed_mbps": s[7]
-                    }
-                    for s in (small_stats or [])
-                ],
-                "top10_large": [
-                    {
-                        "size_bytes": s[0],
-                        "count": s[1],
-                        "avg_speed_mbps": s[2],
-                        "median_speed_mbps": s[3],
-                        "min_speed_mbps": s[4],
-                        "max_speed_mbps": s[5],
-                        "p90_speed_mbps": s[6],
-                        "p95_speed_mbps": s[7]
-                    }
-                    for s in (large_stats or [])
-                ],
-                "overall": {
-                    "avg_speed_mbps": avg_speed,
-                    "median_speed_mbps": median_speed,
-                    "min_speed_mbps": min_speed,
-                    "max_speed_mbps": max_speed,
-                    "p90_speed_mbps": p90_speed,
-                    "p95_speed_mbps": p95_speed
+        if self.client_overhead_ms is not None:
+            out["client_overhead_ms"] = self.client_overhead_ms
+
+        latency = {}
+        write_lat = summarize_latencies(self.write_latencies_ms)
+        read_lat = summarize_latencies(self.read_latencies_ms)
+        if write_lat:
+            latency["write"] = write_lat
+        if read_lat:
+            latency["read"] = read_lat
+        if latency:
+            out["latency"] = latency
+
+        for op_type, key in (("upload", "write_file_analysis"), ("download", "read_file_analysis")):
+            small_stats, large_stats, overall = self.get_file_stats(op_type)
+            if small_stats or large_stats:
+                out[key] = {
+                    "top10_small": small_stats or [],
+                    "top10_large": large_stats or [],
+                    "overall": overall,
                 }
-            }
-            out["write_file_analysis"] = write_file_analysis
-        
-        if read_analysis[0] or read_analysis[1]:  # Есть статистика по чтению
-            small_stats, large_stats, speed_stats = read_analysis
-            avg_speed, median_speed, min_speed, max_speed, p90_speed, p95_speed = speed_stats
-            read_file_analysis = {
-                "top10_small": [
-                    {
-                        "size_bytes": s[0],
-                        "count": s[1],
-                        "avg_speed_mbps": s[2],
-                        "median_speed_mbps": s[3],
-                        "min_speed_mbps": s[4],
-                        "max_speed_mbps": s[5],
-                        "p90_speed_mbps": s[6],
-                        "p95_speed_mbps": s[7]
-                    }
-                    for s in (small_stats or [])
-                ],
-                "top10_large": [
-                    {
-                        "size_bytes": s[0],
-                        "count": s[1],
-                        "avg_speed_mbps": s[2],
-                        "median_speed_mbps": s[3],
-                        "min_speed_mbps": s[4],
-                        "max_speed_mbps": s[5],
-                        "p90_speed_mbps": s[6],
-                        "p95_speed_mbps": s[7]
-                    }
-                    for s in (large_stats or [])
-                ],
-                "overall": {
-                    "avg_speed_mbps": avg_speed,
-                    "median_speed_mbps": median_speed,
-                    "min_speed_mbps": min_speed,
-                    "max_speed_mbps": max_speed,
-                    "p90_speed_mbps": p90_speed,
-                    "p95_speed_mbps": p95_speed
-                }
-            }
-            out["read_file_analysis"] = read_file_analysis
-        
+
+        # Закрываем CSV до записи отчёта, чтобы обе выгрузки были полными
+        self.close()
         with open(self.json_path, "w") as f:
             json.dump(out, f, indent=2)
         return out
@@ -623,6 +527,34 @@ def _get_aws_env(
     return env, profile_to_use
 
 
+def _run_interruptible(cmd: list[str], env: dict, stop: threading.Event | None = None):
+    """Запускает процесс и ждёт завершения с возможностью прерывания по stop.
+
+    communicate(timeout=...) возвращается в момент фактического выхода процесса,
+    поэтому время завершения не квантуется интервалом опроса (старый цикл
+    poll()+sleep(0.1) добавлял к latency до 100 мс).
+    """
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+    _register_process(proc)
+    try:
+        while True:
+            try:
+                stdout, stderr = proc.communicate(timeout=0.25)
+                break
+            except subprocess.TimeoutExpired:
+                if stop and stop.is_set():
+                    proc.terminate()
+                    try:
+                        stdout, stderr = proc.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        stdout, stderr = proc.communicate()
+                    break
+        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+    finally:
+        _unregister_process(proc)
+
+
 def aws_cp_upload(
     local: Path,
     bucket: str,
@@ -636,47 +568,16 @@ def aws_cp_upload(
     max_concurrent_requests: int | None = None,
     stop: threading.Event | None = None,
 ):
-    """
-    Загружает файл в S3 используя aws s3 cp.
-    AWS CLI автоматически определяет, использовать ли multipart upload на основе
-    multipart_threshold из переменной окружения AWS_CLI_FILE_TRANSFER_CONFIG.
-    
-    Args:
-        stop: Event для проверки прерывания. Если установлен, процесс будет прерван.
-    """
+    """Загружает файл в S3 через aws s3 cp (multipart выбирается CLI автоматически)."""
     env, profile_name = _get_aws_env(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
-    # Всегда используем aws s3 cp - он автоматически выберет multipart или обычный PUT
-    # на основе multipart_threshold из настроек профиля
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", str(local), url, "--endpoint-url", endpoint]
     if profile_name:
         cmd.extend(["--profile", profile_name])
-    
-    # Используем Popen для возможности прерывания
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-    _register_process(proc)
-    
-    try:
-        # Ожидаем завершения процесса, периодически проверяя stop
-        while proc.poll() is None:
-            if stop and stop.is_set():
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                break
-            time.sleep(0.1)
-        
-        stdout, stderr = proc.communicate()
-        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        return result
-    finally:
-        _unregister_process(proc)
+    return _run_interruptible(cmd, env, stop)
 
 
 def aws_list_objects(
@@ -765,126 +666,71 @@ def aws_cp_download(
         access_key, secret_key, aws_profile,
         multipart_threshold, multipart_chunksize, max_concurrent_requests
     )
-    # Используем aws s3 cp для download - он может использовать параллельные запросы для больших файлов
-    # max_concurrent_requests из настроек профиля влияет на количество параллельных запросов
     devnull = "NUL" if os.name == "nt" else "/dev/null"
     url = f"{bucket}/{key}" if bucket.startswith("s3://") else f"s3://{bucket}/{key}"
     cmd = ["aws", "s3", "cp", url, devnull, "--endpoint-url", endpoint]
     if profile_name:
         cmd.extend(["--profile", profile_name])
-    
-    # Используем Popen для возможности прерывания
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
-    _register_process(proc)
-    
-    try:
-        # Ожидаем завершения процесса, периодически проверяя stop
-        while proc.poll() is None:
-            if stop and stop.is_set():
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait()
-                break
-            time.sleep(0.1)
-        
-        stdout, stderr = proc.communicate()
-        res = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
-        
-        # Если команда успешна (returncode == 0), возвращаем результат как есть
-        if res.returncode == 0:
-            return res
-        # Если есть ошибка обновления времени модификации /dev/null, но данные загружены, считаем успехом
-        if res.returncode != 0 and res.stderr:
-            # aws s3 cp может выдать ошибку при попытке обновить время модификации /dev/null
-            # но данные уже загружены, так что это не критично
-            if ("download" in res.stderr.lower() or "successfully" in res.stderr.lower()) and \
-               ("unable to update" in res.stderr.lower() or "last modified" in res.stderr.lower() or "dev/null" in res.stderr.lower()):
-                # Данные загружены успешно, просто не удалось обновить время модификации
-                # Создаём фиктивный успешный результат
-                class FakeResult:
-                    returncode = 0
-                    stdout = res.stdout
-                    stderr = ""
-                    args = res.args
-                return FakeResult()
-        # Для всех остальных ошибок возвращаем исходный результат
-        return res
-    finally:
-        _unregister_process(proc)
+    res = _run_interruptible(cmd, env, stop)
+
+    # aws s3 cp не может обновить mtime у /dev/null и возвращает ошибку,
+    # хотя данные уже скачаны — считаем такую операцию успешной
+    if res.returncode != 0 and res.stderr:
+        stderr_low = res.stderr.lower()
+        if ("download" in stderr_low or "successfully" in stderr_low) and \
+           ("unable to update" in stderr_low or "last modified" in stderr_low or "dev/null" in stderr_low):
+            return subprocess.CompletedProcess(res.args, 0, res.stdout, "")
+    return res
 
 
 def retry_with_backoff(func, max_retries: int, backoff_base: float, *args, stop: threading.Event | None = None, **kwargs):
-    """Выполняет функцию с повторными попытками и экспоненциальным backoff."""
+    """Выполняет функцию с повторами и экспоненциальным backoff.
+
+    Возвращает (result, ok, error, attempts) — attempts нужен для метрик.
+    """
     last_error = None
+    last_result = None
+    accepts_stop = "stop" in inspect.signature(func).parameters
+
+    def wait_or_abort(attempt: int) -> bool:
+        """Ждёт backoff-паузу; False — если во время ожидания пришёл stop."""
+        wait_time = backoff_base ** attempt
+        for _ in range(int(wait_time * 10)):
+            if stop and stop.is_set():
+                return False
+            time.sleep(0.1)
+        return True
+
     for attempt in range(max_retries + 1):
-        # Проверяем stop перед каждой попыткой
+        attempts = attempt + 1
         if stop and stop.is_set():
-            return None, False, "interrupted by user"
+            return None, False, "interrupted by user", attempts
         try:
-            # Передаем stop в функцию, если она его принимает
-            # Проверяем сигнатуру функции для определения, принимает ли она stop
-            sig = inspect.signature(func)
-            if 'stop' in sig.parameters:
+            if accepts_stop:
                 result = func(*args, stop=stop, **kwargs)
             else:
                 result = func(*args, **kwargs)
-            # Проверяем успешность операции
+        except Exception as e:
+            result = None
+            last_error = str(e)
+        else:
             if result is None:
                 last_error = "function returned None"
-                if attempt < max_retries:
-                    wait_time = backoff_base ** attempt
-                    # Проверяем stop во время ожидания
-                    for _ in range(int(wait_time * 10)):
-                        if stop and stop.is_set():
-                            return None, False, "interrupted by user"
-                        time.sleep(0.1)
-                    continue
-                else:
-                    return None, False, last_error
-            # Проверяем наличие атрибута returncode
-            if not hasattr(result, 'returncode'):
+            elif not hasattr(result, "returncode"):
                 last_error = f"result has no returncode attribute, type: {type(result)}"
-                if attempt < max_retries:
-                    wait_time = backoff_base ** attempt
-                    # Проверяем stop во время ожидания
-                    for _ in range(int(wait_time * 10)):
-                        if stop and stop.is_set():
-                            return None, False, "interrupted by user"
-                        time.sleep(0.1)
-                    continue
-                else:
-                    return result, False, last_error
-            # Если returncode == 0, операция успешна
-            if result.returncode == 0:
-                return result, True, None
-            # Если returncode != 0, это ошибка
-            elif attempt < max_retries:
-                wait_time = backoff_base ** attempt
-                # Проверяем stop во время ожидания
-                for _ in range(int(wait_time * 10)):
-                    if stop and stop.is_set():
-                        return None, False, "interrupted by user"
-                    time.sleep(0.1)
-                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else f"exit code {result.returncode}"
+                last_result = result
+            elif result.returncode == 0:
+                return result, True, None, attempts
             else:
-                last_error = result.stderr[-200:] if hasattr(result, 'stderr') and result.stderr else f"exit code {result.returncode}"
-                return result, False, last_error
-        except Exception as e:
-            if attempt < max_retries:
-                wait_time = backoff_base ** attempt
-                # Проверяем stop во время ожидания
-                for _ in range(int(wait_time * 10)):
-                    if stop and stop.is_set():
-                        return None, False, "interrupted by user"
-                    time.sleep(0.1)
-                last_error = str(e)
-            else:
-                last_error = str(e)
-                return None, False, last_error
-    return None, False, last_error or "max retries exceeded"
+                last_result = result
+                stderr = getattr(result, "stderr", None)
+                last_error = stderr[-200:] if stderr else f"exit code {result.returncode}"
+        if attempt < max_retries:
+            if not wait_or_abort(attempt):
+                return None, False, "interrupted by user", attempts
+            continue
+        return last_result, False, last_error or "max retries exceeded", attempts
+    return last_result, False, last_error or "max retries exceeded", max_retries + 1
 
 
 def gather_files(root: Path):
@@ -1056,7 +902,20 @@ def run_profile(args):
         # Для mixed профиля сначала загружаем данные
         for job in jobs:
             q.put(("upload", job))
-    metrics = Metrics(args.metrics, args.report)
+    warmup_sec = float(getattr(args, "warmup_sec", 0.0) or 0.0)
+    metrics = Metrics(args.metrics, args.report, warmup_sec=warmup_sec)
+    if warmup_sec > 0:
+        print(f"Warmup: первые {warmup_sec:.0f} с исключаются из статистики")
+
+    # Базовый оверхед клиента: время холодного старта aws CLI без сетевых операций.
+    # Он входит в latency каждой операции — фиксируем для честной интерпретации отчёта.
+    try:
+        _t0 = time.time()
+        subprocess.run(["aws", "--version"], capture_output=True, timeout=30)
+        metrics.client_overhead_ms = round((time.time() - _t0) * 1000, 1)
+        print(f"Оверхед запуска aws CLI: ~{metrics.client_overhead_ms:.0f} ms входит в latency каждой операции")
+    except Exception:
+        pass
 
     stop = threading.Event()
     
@@ -1173,7 +1032,7 @@ def run_profile(args):
                 # Сохраняем endpoint в job для последующего использования
                 job.endpoint = endpoint
                 # Используем retry с backoff
-                res, ok, err = retry_with_backoff(
+                res, ok, err, attempts = retry_with_backoff(
                     aws_cp_upload,
                     max_retries,
                     retry_backoff_base,
@@ -1194,7 +1053,11 @@ def run_profile(args):
                 end = time.time()
                 nbytes = job.size
                 filename = job.path.name
-                metrics.record("upload", start, end, nbytes, ok, err, display_name, recent_op_id)
+                metrics.record(
+                    "upload", start, end, nbytes, ok, err, display_name, recent_op_id,
+                    endpoint=endpoint, thread_id=threading.get_ident(),
+                    attempt=attempts, size_group=job.group,
+                )
                 if ok:
                     with group_lock:
                         grp = groups[job.group]
@@ -1220,7 +1083,7 @@ def run_profile(args):
                 # Используем endpoint из job, если он был сохранён при записи, иначе выбираем новый
                 endpoint = job.endpoint if job.endpoint else next_endpoint()
                 # Используем retry с backoff
-                res, ok, err = retry_with_backoff(
+                res, ok, err, attempts = retry_with_backoff(
                     aws_cp_download,
                     max_retries,
                     retry_backoff_base,
@@ -1269,7 +1132,11 @@ def run_profile(args):
                 nbytes = job.size
                 # Определяем имя файла для отображения
                 filename = key
-                metrics.record("download", start, end, nbytes, ok, err, filename, recent_op_id)
+                metrics.record(
+                    "download", start, end, nbytes, ok, err, filename, recent_op_id,
+                    endpoint=endpoint, thread_id=threading.get_ident(),
+                    attempt=attempts, size_group=job.group,
+                )
             with active_lock:
                 if op == "upload":
                     active_uploads -= 1

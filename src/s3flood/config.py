@@ -59,6 +59,12 @@ class RunConfigModel(BaseModel):
     # Порядок обработки файлов
     order: Optional[str] = None  # sequential | random
     unique_remote_names: Optional[bool] = None
+    # Прогрев: операции первых N секунд не учитываются в статистике
+    warmup_sec: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        validation_alias=AliasChoices("warmup_sec", "warmup-sec"),
+    )
     # Настройки AWS CLI (переопределяют настройки из ~/.aws/config)
     # Принимаем строки типа "5GB", "8MB" или числа (интерпретируются как MB)
     aws_cli_multipart_threshold: Optional[Union[str, int]] = Field(default=None)  # порог для multipart (MB или строка типа "5GB")
@@ -91,6 +97,7 @@ class RunSettings:
     retry_backoff_base: Optional[float]
     order: Optional[str]
     unique_remote_names: bool
+    warmup_sec: float
     aws_cli_multipart_threshold: Optional[int]
     aws_cli_multipart_chunksize: Optional[int]
     aws_cli_max_concurrent_requests: Optional[int]
@@ -182,6 +189,7 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
     retry_backoff_base = pick("retry_backoff_base", default=2.0)
     
     unique_remote_names = bool(pick("unique_remote_names", default=False))
+    warmup_sec = float(pick("warmup_sec", default=0.0) or 0.0)
     
     # Порядок обработки файлов
     order = pick("order", default="sequential")
@@ -238,6 +246,7 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         retry_backoff_base=retry_backoff_base,
         order=order,
         unique_remote_names=unique_remote_names,
+        warmup_sec=warmup_sec,
         aws_cli_multipart_threshold=aws_cli_multipart_threshold,
         aws_cli_multipart_chunksize=aws_cli_multipart_chunksize,
         aws_cli_max_concurrent_requests=aws_cli_max_concurrent_requests,

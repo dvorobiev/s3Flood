@@ -61,6 +61,7 @@ def main():
     dcreate.add_argument("--min-counts", type=str, default="100,50,20", help="Минимальное количество файлов для групп small,medium,large (формат: '100,50,20')")
     dcreate.add_argument("--group-limits", type=str, default="100MB,1GB,10GB", help="Максимальные размеры файлов для групп small,medium,large (формат: '100MB,1GB,10GB'). Совет: ≤5GB для защиты от BadDigest")
     dcreate.add_argument("--safety-ratio", type=float, default=0.8, help="Доля свободного места для использования при --target-bytes auto (по умолчанию 0.8 = 80%%)")
+    dcreate.add_argument("--fill", choices=["random", "zero"], default="random", help="Содержимое файлов: random (несжимаемое, честные результаты) или zero (нули, быстрое создание, но хранилища с компрессией/дедупликацией покажут завышенные скорости)")
 
     run_epilog = """
 Примеры запуска тестирования:
@@ -125,6 +126,7 @@ def main():
     runp.add_argument("--retry-backoff-base", type=float, dest="retry_backoff_base", default=None, help="Базовый множитель для экспоненциального backoff при повторах (по умолчанию: 2.0, т.е. задержки: 1s, 2s, 4s)")
     runp.add_argument("--order", choices=["sequential","random"], default=None, help="Порядок обработки файлов: sequential (сначала маленькие, потом средние, потом большие) или random (случайный порядок)")
     runp.add_argument("--unique-remote-names", dest="unique_remote_names", action="store_true", default=None, help="Добавлять уникальный постфикс к имени объекта при загрузке (полезно для бесконечных прогонов, чтобы не перезаписывать предыдущие файлы)")
+    runp.add_argument("--warmup-sec", type=float, dest="warmup_sec", default=None, help="Прогрев: операции первых N секунд выполняются, но исключаются из статистики (по умолчанию: 0)")
 
     args = parser.parse_args()
 
@@ -142,6 +144,7 @@ def main():
             min_counts=args.min_counts,
             group_limits=args.group_limits,
             safety_ratio=args.safety_ratio,
+            fill=args.fill,
         )
     elif args.cmd == "run":
         config_model = None
