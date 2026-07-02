@@ -1,5 +1,4 @@
 import argparse
-import sys
 from .config import load_run_config, resolve_run_settings
 from .dataset import plan_and_generate
 from .executor import run_profile

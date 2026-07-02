@@ -2,45 +2,30 @@
 Интерактивное меню для s3flood с использованием rich и questionary.
 """
 from rich.console import Console
-from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
 from rich.table import Table
-from rich.text import Text
 from pathlib import Path
 import argparse
 import os
 import subprocess
-import sys
 import time
 import threading
 import yaml
 
 from .defaults import DEFAULT_S3_PORT
 import questionary
-import shutil
 import csv
 import statistics
-from copy import deepcopy
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Union
+from typing import Optional
 from urllib.parse import urlparse, urlunparse
 from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.completion import PathCompleter
-from prompt_toolkit.application import Application
-from prompt_toolkit.filters import Condition
-from prompt_toolkit.formatted_text import HTML, FormattedText
-from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout, Window
-from prompt_toolkit.layout.containers import ConditionalContainer
-from prompt_toolkit.layout.controls import FormattedTextControl
-from prompt_toolkit.layout.dimension import Dimension
-from prompt_toolkit.styles import Style
-from prompt_toolkit.widgets import TextArea
+from prompt_toolkit.formatted_text import HTML
 
-from .config import load_run_config, RunConfigModel, resolve_run_settings
+from .config import load_run_config, resolve_run_settings
 from .config_editor import build_default_config, edit_config_interactively
 from .dataset import plan_and_generate
-from .executor import run_profile, aws_list_objects, aws_check_bucket_access, _get_aws_env, get_spinner
+from .executor import run_profile, get_spinner
+from .runner import _get_aws_env, aws_check_bucket_access, aws_list_objects
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,8 +41,6 @@ ANSI_YELLOW = "\x1b[33m"
 def supports_emoji() -> bool:
     """Проверяет, поддерживает ли терминал эмодзи."""
     try:
-        # Проверяем через переменные окружения и capabilities терминала
-        term = os.environ.get("TERM", "")
         # Если терминал поддерживает UTF-8, скорее всего поддерживает эмодзи
         if "UTF" in os.environ.get("LANG", "").upper() or "UTF" in os.environ.get("LC_ALL", "").upper():
             return True
@@ -212,32 +195,9 @@ def run_test_menu():
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    # Готовим псевдо-CLI аргументы: все берём из конфига, кроме profile
-    cli_args = argparse.Namespace(
-        profile=profile_value,
-        client=None,
-        endpoint=None,
-        endpoints=None,
-        endpoint_mode=None,
-        bucket=None,
-        access_key=None,
-        secret_key=None,
-        aws_profile=None,
-        threads=None,
-        infinite=None,
-        report=None,
-        metrics=None,
-        data_dir=None,
-        mixed_read_ratio=None,
-        pattern=None,
-        burst_duration_sec=None,
-        burst_intensity_multiplier=None,
-        queue_limit=None,
-        max_retries=None,
-        retry_backoff_base=None,
-        order=None,
-        unique_remote_names=None,
-    )
+    # Псевдо-CLI аргументы: всё берём из конфига, кроме profile
+    # (resolve_run_settings читает атрибуты через getattr с дефолтом None)
+    cli_args = argparse.Namespace(profile=profile_value)
 
     try:
         settings = resolve_run_settings(cli_args, config_model)
@@ -720,32 +680,8 @@ def validate_config_menu():
         questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
         return
 
-    # Собираем настройки (используем write-профиль по умолчанию — профиль здесь не важен)
-    cli_args = argparse.Namespace(
-        profile="write",
-        client=None,
-        endpoint=None,
-        endpoints=None,
-        endpoint_mode=None,
-        bucket=None,
-        access_key=None,
-        secret_key=None,
-        aws_profile=None,
-        threads=None,
-        infinite=None,
-        report=None,
-        metrics=None,
-        data_dir=None,
-        mixed_read_ratio=None,
-        pattern=None,
-        burst_duration_sec=None,
-        burst_intensity_multiplier=None,
-        queue_limit=None,
-        max_retries=None,
-        retry_backoff_base=None,
-        order=None,
-        unique_remote_names=None,
-    )
+    # Собираем настройки (write-профиль по умолчанию — профиль здесь не важен)
+    cli_args = argparse.Namespace(profile="write")
 
     try:
         settings = resolve_run_settings(cli_args, config_model)
@@ -1014,7 +950,6 @@ def view_metrics_menu():
     ts_max = max(o["ts_end"] for o in ops)
     total_duration = max(ts_max - ts_min, 0.0)
 
-    total_bytes = sum(o["bytes"] for o in ops)
     ok_ops = [o for o in ops if o["status"] == "ok"]
     err_ops = [o for o in ops if o["status"] != "ok"]
 
