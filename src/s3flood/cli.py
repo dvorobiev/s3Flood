@@ -127,6 +127,18 @@ def main():
     runp.add_argument("--unique-remote-names", dest="unique_remote_names", action="store_true", default=None, help="Добавлять уникальный постфикс к имени объекта при загрузке (полезно для бесконечных прогонов, чтобы не перезаписывать предыдущие файлы)")
     runp.add_argument("--warmup-sec", type=float, dest="warmup_sec", default=None, help="Прогрев: операции первых N секунд выполняются, но исключаются из статистики (по умолчанию: 0)")
 
+    browsep = sub.add_parser(
+        "browse",
+        help="Двухпанельный TUI-браузер бакета (файлы и версии объектов)",
+    )
+    browsep.add_argument("--config", help="YAML-конфиг с endpoint/bucket/кредами")
+    browsep.add_argument("--prefix", default="", help="Начальный префикс в бакете")
+    browsep.add_argument("--endpoint", default=None, help="URL S3 endpoint (вместо конфига)")
+    browsep.add_argument("--bucket", default=None, help="Имя бакета (вместо конфига)")
+    browsep.add_argument("--access-key", dest="access_key", default=None)
+    browsep.add_argument("--secret-key", dest="secret_key", default=None)
+    browsep.add_argument("--aws-profile", dest="aws_profile", default=None)
+
     args = parser.parse_args()
 
     # Запуск интерактивного меню, если указан флаг или нет команды
@@ -154,3 +166,14 @@ def main():
                 raise SystemExit(f"Не удалось прочитать конфиг: {exc}") from exc
         settings = resolve_run_settings(args, config_model)
         run_profile(settings.to_namespace())
+    elif args.cmd == "browse":
+        config_model = None
+        if args.config:
+            try:
+                config_model = load_run_config(args.config)
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"Не удалось прочитать конфиг: {exc}") from exc
+        args.profile = "write"  # профиль не используется браузером, нужен для resolve
+        settings = resolve_run_settings(args, config_model)
+        from .browser import browse_bucket
+        browse_bucket(settings, prefix=args.prefix)

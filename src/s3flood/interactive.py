@@ -1045,6 +1045,48 @@ def view_metrics_menu():
     questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
 
 
+def browse_bucket_menu():
+    """Двухпанельный браузер бакета: выбор конфига и запуск TUI."""
+    console.clear()
+    console.rule("[bold cyan]⇄ Браузер бакета[/bold cyan]", style="dim")
+
+    cwd = Path(".").resolve()
+    configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
+    choices = [str(cfg.name) for cfg in configs]
+    choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
+    choices.append(questionary.Separator())
+    choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
+
+    choice = q_select("Конфиг с endpoint и бакетом:", choices=choices).ask()
+    if not choice or choice.startswith(get_menu_emoji("⬅️")):
+        return
+    if choice.startswith(get_menu_emoji("📂")):
+        config_path = questionary.path(
+            "Путь к YAML-конфигу:",
+            completer=path_completer,
+            validate=lambda p: Path(p).expanduser().exists() or "Файл не найден",
+        ).ask()
+        if not config_path:
+            return
+    else:
+        config_path = str(cwd / choice)
+
+    try:
+        config_model = load_run_config(config_path)
+        settings = resolve_run_settings(argparse.Namespace(profile="write"), config_model)
+    except (OSError, ValueError, SystemExit) as exc:
+        console.print(f"[bold red]Ошибка конфигурации: {exc}[/bold red]")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+        return
+
+    from .browser import browse_bucket
+    try:
+        browse_bucket(settings)
+    except Exception as exc:
+        console.print(f"[bold red]Браузер завершился с ошибкой: {exc}[/bold red]")
+        questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
+
+
 def _brand_panel():
     """Шапка главного меню: бренд, версия, краткое описание."""
     from rich import box
@@ -1069,6 +1111,7 @@ def run_interactive():
             choices=[
                 f"{get_menu_emoji('🚀', '[1]')} Запустить тест",
                 f"{get_menu_emoji('📦', '[2]')} Создать датасет",
+                "⇄ Браузер бакета",
                 f"{get_menu_emoji('🧩', '[3]')} Конфиги и проверка",
                 f"{get_menu_emoji('📊', '[4]')} Просмотр метрик",
                 questionary.Separator(),
@@ -1085,6 +1128,8 @@ def run_interactive():
             run_test_menu()
         elif choice.startswith(get_menu_emoji("📦")):
             create_dataset_menu()
+        elif choice.startswith("⇄"):
+            browse_bucket_menu()
         elif choice.startswith(get_menu_emoji("🧩")):
             manage_configs_menu()
         elif choice.startswith(get_menu_emoji("📊")):
