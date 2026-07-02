@@ -8,11 +8,15 @@ MetricsCsvWriter — буферизованная запись CSV в отдел
 from __future__ import annotations
 
 import csv
+import math
 import queue
+import re
 import statistics
 import threading
 import time
 from collections import deque
+
+_AWS_ERROR_CODE_RE = re.compile(r"An error occurred \((\w+)\)")
 
 CSV_FIELDS = [
     "ts_start", "ts_end", "op", "bytes", "status",
@@ -65,6 +69,55 @@ def summarize_latencies(latencies_ms: list[float]) -> dict | None:
         "p95_ms": percentile(latencies_ms, 95),
         "p99_ms": percentile(latencies_ms, 99),
     }
+
+
+def classify_error(err: str | None) -> str:
+    """Классифицирует текст ошибки в короткий тип для сводки отчёта."""
+    if not err:
+        return "unknown"
+    match = _AWS_ERROR_CODE_RE.search(err)
+    if match:
+        return match.group(1)
+    low = err.lower()
+    if "timeout" in low or "timed out" in low:
+        return "timeout"
+    if "could not connect" in low or "connection" in low:
+        return "connection"
+    if "interrupted by user" in low:
+        return "interrupted"
+    return "other"
+
+
+def build_timeline(ops, max_points: int = 300) -> list[dict]:
+    """Строит посекундный таймлайн операций для графиков.
+
+    ops — кортежи (op, start, end, nbytes, ok, lat_ms); операция относится
+    к бакету по времени завершения. Длинные прогоны укрупняются так, чтобы
+    точек было не больше max_points.
+    """
+    if not ops:
+        return []
+    t_first = min(op[1] for op in ops)
+    t_last = max(op[2] for op in ops)
+    span = max(t_last - t_first, 1e-6)
+    step = max(1, math.ceil(span / max_points))
+    buckets: dict[int, dict] = {}
+    for op, start, end, nbytes, ok, _lat in ops:
+        t_sec = int((end - t_first) // step) * step
+        b = buckets.setdefault(t_sec, {
+            "t_sec": t_sec,
+            "write_ops": 0, "read_ops": 0, "err_ops": 0,
+            "write_bytes": 0, "read_bytes": 0,
+        })
+        if not ok:
+            b["err_ops"] += 1
+        elif op == "upload":
+            b["write_ops"] += 1
+            b["write_bytes"] += nbytes
+        elif op == "download":
+            b["read_ops"] += 1
+            b["read_bytes"] += nbytes
+    return [buckets[k] for k in sorted(buckets)]
 
 
 class RateWindow:

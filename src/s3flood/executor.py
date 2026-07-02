@@ -1,9 +1,16 @@
-import json, time, queue, threading, subprocess, os, sys, re, random, math, uuid, signal, inspect
+import json, time, queue, threading, subprocess, os, socket, sys, re, random, math, uuid, signal, inspect
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass
 
-from .metrics import MetricsCsvWriter, RateWindow, summarize_latencies, summarize_speeds
+from .metrics import (
+    MetricsCsvWriter,
+    RateWindow,
+    build_timeline,
+    classify_error,
+    summarize_latencies,
+    summarize_speeds,
+)
 
 # Minimal executor with AWS CLI runner only (v1)
 
@@ -198,6 +205,8 @@ class Metrics:
         self.warmup_until = self._start + max(warmup_sec or 0.0, 0.0)
         self.warmup_ops = 0
         self.client_overhead_ms: float | None = None
+        self.meta: dict | None = None
+        self.error_counts: dict[str, int] = {}
         self.read_bytes = 0
         self.write_bytes = 0
         self.read_ops_ok = 0
@@ -306,7 +315,9 @@ class Metrics:
                     self.last_upload = {"bytes": nbytes, "lat_ms": lat_ms, "ended": end}
             else:
                 self.err_ops += 1
-    
+                err_type = classify_error(err)
+                self.error_counts[err_type] = self.error_counts.get(err_type, 0) + 1
+
     def get_recent_ops(self, count=6):
         """Возвращает последние операции для отображения в дашборде."""
         with self._lock:
@@ -405,7 +416,10 @@ class Metrics:
         write_MBps_avg = (self.write_bytes / 1024 / 1024 / write_duration) if write_duration > 0 else 0.0
         read_MBps_avg = (self.read_bytes / 1024 / 1024 / read_duration) if read_duration > 0 else 0.0
 
-        out = {
+        out = {}
+        if self.meta:
+            out["meta"] = self.meta
+        out.update({
             "duration_sec": active_duration if active_duration > 0 else wall_clock,
             "wall_clock_sec": wall_clock,
             "write_bytes": self.write_bytes,
@@ -418,9 +432,13 @@ class Metrics:
             "write_ok_ops": self.write_ops_ok,
             "err_ops": self.err_ops,
             "warmup_ops": self.warmup_ops,
-        }
+        })
         if self.client_overhead_ms is not None:
             out["client_overhead_ms"] = self.client_overhead_ms
+        if self.error_counts:
+            out["errors"] = dict(sorted(self.error_counts.items(), key=lambda kv: -kv[1]))
+        with self._lock:
+            out["timeline"] = build_timeline(self.ops)
 
         latency = {}
         write_lat = summarize_latencies(self.write_latencies_ms)
@@ -904,6 +922,24 @@ def run_profile(args):
             q.put(("upload", job))
     warmup_sec = float(getattr(args, "warmup_sec", 0.0) or 0.0)
     metrics = Metrics(args.metrics, args.report, warmup_sec=warmup_sec)
+    try:
+        from importlib.metadata import version as _pkg_version
+        _version = _pkg_version("s3flood")
+    except Exception:
+        _version = "unknown"
+    metrics.meta = {
+        "version": _version,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "hostname": socket.gethostname(),
+        "profile": profile,
+        "pattern": pattern,
+        "threads": args.threads,
+        "endpoints": endpoints_list,
+        "endpoint_mode": endpoint_mode,
+        "bucket": args.bucket,
+        "warmup_sec": warmup_sec,
+        "infinite": bool(getattr(args, "infinite", False)),
+    }
     if warmup_sec > 0:
         print(f"Warmup: первые {warmup_sec:.0f} с исключаются из статистики")
 
@@ -1591,4 +1627,77 @@ def run_profile(args):
         t.join()
 
     summary = metrics.finalize()
-    print("SUMMARY:", json.dumps(summary, indent=2))
+    print_summary(summary, metrics.csv_path, metrics.json_path)
+
+
+def print_summary(summary: dict, csv_path: str, json_path: str) -> None:
+    """Печатает итог прогона: rich-таблицы вместо сырого JSON."""
+    try:
+        from rich import box
+        from rich.console import Console
+        from rich.table import Table
+    except ImportError:
+        print("SUMMARY:", json.dumps(summary, indent=2))
+        return
+
+    console = Console()
+    meta = summary.get("meta", {})
+    title = f"Итог прогона: {meta.get('profile', '?')}"
+    if meta.get("version"):
+        title += f" | s3flood {meta['version']}"
+    console.print()
+    console.rule(title)
+
+    tp = Table(box=box.SIMPLE_HEAVY, title="Пропускная способность", title_justify="left")
+    tp.add_column("")
+    tp.add_column("операций OK", justify="right")
+    tp.add_column("объём", justify="right")
+    tp.add_column("средняя скорость", justify="right")
+    tp.add_row(
+        "Запись", str(summary.get("write_ok_ops", 0)),
+        format_bytes(summary.get("write_bytes", 0)),
+        f"{summary.get('write_MBps_avg', 0.0):.1f} MB/s",
+    )
+    tp.add_row(
+        "Чтение", str(summary.get("read_ok_ops", 0)),
+        format_bytes(summary.get("read_bytes", 0)),
+        f"{summary.get('read_MBps_avg', 0.0):.1f} MB/s",
+    )
+    console.print(tp)
+
+    latency = summary.get("latency") or {}
+    if latency:
+        lt = Table(box=box.SIMPLE_HEAVY, title="Латентность, мс", title_justify="left")
+        lt.add_column("")
+        for col in ("p50", "p90", "p95", "p99", "avg", "max"):
+            lt.add_column(col, justify="right")
+        for name, key in (("Запись", "write"), ("Чтение", "read")):
+            data = latency.get(key)
+            if data:
+                lt.add_row(
+                    name,
+                    *(f"{data[k]:.0f}" for k in ("p50_ms", "p90_ms", "p95_ms", "p99_ms", "avg_ms", "max_ms")),
+                )
+        console.print(lt)
+        if summary.get("client_overhead_ms"):
+            console.print(
+                f"[dim]В латентность каждой операции входит ~{summary['client_overhead_ms']:.0f} мс "
+                f"оверхеда запуска aws CLI[/dim]"
+            )
+
+    errors = summary.get("errors") or {}
+    if errors:
+        et = Table(box=box.SIMPLE_HEAVY, title="Ошибки", title_justify="left")
+        et.add_column("тип")
+        et.add_column("количество", justify="right")
+        for err_type, count in errors.items():
+            et.add_row(f"[red]{err_type}[/red]", str(count))
+        console.print(et)
+
+    duration = summary.get("duration_sec", 0.0)
+    wall = summary.get("wall_clock_sec", 0.0)
+    console.print(
+        f"Активное время: [bold]{duration:.1f} с[/bold] (wall clock {wall:.1f} с)"
+        + (f" | warmup-операций исключено: {summary['warmup_ops']}" if summary.get("warmup_ops") else "")
+    )
+    console.print(f"[dim]Отчёт: {json_path} | метрики: {csv_path}[/dim]")
