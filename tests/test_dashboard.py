@@ -2,7 +2,25 @@ import time
 
 from rich.console import Console
 
-from s3flood.dashboard import build_dashboard
+from s3flood.dashboard import build_dashboard, sparkline
+
+
+class TestSparkline:
+    def test_renders_blocks(self):
+        s = sparkline([0, 1, 2, 4, 8], width=5)
+        assert len(s) == 5
+        assert s[0] in "▁ " and s[-1] == "█"
+
+    def test_empty(self):
+        assert sparkline([], width=10) == ""
+
+    def test_constant_values_not_empty(self):
+        s = sparkline([5, 5, 5], width=3)
+        assert len(s) == 3
+
+    def test_truncates_to_width(self):
+        s = sparkline(list(range(100)), width=12)
+        assert len(s) == 12
 
 
 def render(state) -> str:
@@ -42,6 +60,11 @@ def base_state(**over):
         "active_uploads": 8,
         "active_downloads": 0,
         "queue": 12,
+        "version": "0.10.0",
+        "endpoint": "http://10.1.0.5:9080",
+        "bucket": "tape",
+        "write_rps_history": [1.0, 2.0, 5.0, 8.0, 12.4],
+        "read_rps_history": [],
         "recent_ops": [
             {
                 "op": "upload", "filename": "abc.bin", "bytes": 900 * 1024**2,
@@ -68,6 +91,20 @@ class TestBuildDashboard:
         assert "abc.bin" in out
         assert "ETA" in out
         assert "3.2 min" in out
+
+    def test_header_shows_endpoint_bucket_and_time(self):
+        out = render(base_state())
+        assert "10.1.0.5:9080" in out
+        assert "tape" in out
+        assert "00:12" in out  # elapsed 12.3s как mm:ss
+
+    def test_sparkline_rendered_from_history(self):
+        out = render(base_state())
+        assert "█" in out  # пик истории W-RPS
+
+    def test_active_op_has_spinner(self):
+        out = render(base_state())
+        assert any(ch in out for ch in "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
 
     def test_errors_shown(self):
         out = render(base_state(files_err=7))

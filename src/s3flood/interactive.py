@@ -32,6 +32,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 console = Console()
 path_completer = PathCompleter(expanduser=True, only_directories=True)
+
+QSTYLE = questionary.Style([
+    ("qmark", ""),
+    ("question", "bold"),
+    ("pointer", "fg:#00d7ff bold"),
+    ("highlighted", "fg:#00d7ff bold"),
+    ("selected", "fg:#00d7ff"),
+    ("separator", "fg:#585858"),
+    ("instruction", "fg:#6c6c6c"),
+    ("answer", "fg:#00d7ff bold"),
+])
+
+
+def q_select(message: str, choices, **kwargs):
+    """questionary.select с единым стилем (указатель ❯, акцентная подсветка)."""
+    kwargs.setdefault("style", QSTYLE)
+    kwargs.setdefault("qmark", "")
+    kwargs.setdefault("pointer", "❯")
+    kwargs.setdefault("use_indicator", False)
+    return questionary.select(message, choices=choices, **kwargs)
+
+
 ANSI_RESET = "\x1b[0m"
 ANSI_BOLD = "\x1b[1m"
 ANSI_CYAN = "\x1b[36m"
@@ -53,9 +75,16 @@ def supports_emoji() -> bool:
         return False
 
 
+MENU_GLYPHS = {
+    "🚀": "▶", "📦": "◆", "🧩": "⚙", "📊": "≡",
+    "⬅️": "←", "📂": "…", "📝": "+", "🔍": "?", "✏️": "✎",
+    "🔺": "↑", "🔻": "↓", "🔀": "⇅",
+}
+
+
 def get_menu_emoji(emoji: str, fallback: str = "") -> str:
-    """Возвращает эмодзи или fallback в зависимости от поддержки."""
-    return emoji if supports_emoji() else fallback
+    """Возвращает моноширинный глиф пункта меню (эмодзи оставлены как ключи)."""
+    return MENU_GLYPHS.get(emoji, fallback or emoji)
 
 
 def format_bytes_to_readable(bytes_val: Optional[int]) -> str:
@@ -133,7 +162,7 @@ def normalize_endpoint_url(value: str) -> str:
 def run_test_menu():
     """Меню запуска теста с выбором конфига и профиля."""
     console.clear()
-    console.rule("[bold yellow]🚀 Запустить тест[/bold yellow]")
+    console.rule("[bold cyan]▶ Запустить тест[/bold cyan]", style="dim")
 
     # Ищем YAML-конфиги в текущей директории
     cwd = Path(".").resolve()
@@ -145,18 +174,17 @@ def run_test_menu():
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
     console.print(
-        "[dim]Стрелки — выбрать конфиг, Enter — продолжить, ⬅️ Вернуться в главное меню — выйти без запуска.[/dim]\n"
+        "[dim]Стрелки — выбрать конфиг, Enter — продолжить, «← Вернуться в главное меню» — выйти без запуска.[/dim]\n"
     )
 
-    choice = questionary.select(
+    choice = q_select(
         "Выберите конфиг:",
-        choices=choices,
-        use_indicator=False,
+        choices=choices
     ).ask()
-    if not choice or choice.startswith("⬅️"):
+    if not choice or choice.startswith(get_menu_emoji("⬅️")):
         return
 
-    if choice.startswith("📂"):
+    if choice.startswith(get_menu_emoji("📂")):
         config_path = questionary.path(
             "Укажите путь к YAML-конфигу (например, config.yaml):",
             completer=path_completer,
@@ -168,21 +196,20 @@ def run_test_menu():
         config_path = str(cwd / choice)
 
     # Выбор профиля нагрузки
-    profile = questionary.select(
+    profile = q_select(
         "Выберите профиль нагрузки:",
         choices=[
             f"{get_menu_emoji('🔺', 'W')} write — только запись",
             f"{get_menu_emoji('🔻', 'R')} read  — только чтение",
             f"{get_menu_emoji('🔀', 'M')} mixed — смешанный профиль",
-        ],
-        use_indicator=False
+        ]
     ).ask()
     if not profile:
         return
 
-    if profile.startswith("🔺"):
+    if profile.startswith(get_menu_emoji("🔺")):
         profile_value = "write"
-    elif profile.startswith("🔻"):
+    elif profile.startswith(get_menu_emoji("🔻")):
         profile_value = "read"
     else:
         profile_value = "mixed"
@@ -333,7 +360,7 @@ def run_test_menu():
     try:
         run_profile(settings.to_namespace())
     except KeyboardInterrupt:
-        console.print("\n[bold yellow]Остановка по запросу пользователя.[/bold yellow]")
+        console.print("\n[bold yellow]Остановка по запросу пользователя.[/bold cyan]", style="dim")
     except Exception as exc:
         console.print(f"[bold red]Ошибка во время выполнения профиля: {exc}[/bold red]")
 
@@ -398,7 +425,7 @@ def validate_group_limits_format(value: str) -> bool:
 def create_dataset_menu():
     """Мастер создания датасета."""
     console.clear()
-    console.rule("[bold yellow]📦 Создать датасет[/bold yellow]")
+    console.rule("[bold cyan]◆ Создать датасет[/bold cyan]", style="dim")
     
     # Путь к датасету
     path = questionary.path(
@@ -410,7 +437,7 @@ def create_dataset_menu():
         return
     
     # Размер датасета
-    target_bytes_choice = questionary.select(
+    target_bytes_choice = q_select(
         "Размер датасета:",
         choices=[
             "auto (использовать 80% свободного места)",
@@ -504,7 +531,7 @@ def create_dataset_menu():
 def create_config_wizard():
     """Создание нового конфига через inline-редактор."""
     console.clear()
-    console.rule(f"[bold yellow]{get_menu_emoji('📝', '')} Создать новый конфиг[/bold yellow]")
+    console.rule(f"[bold cyan]{get_menu_emoji('📝', '')} Создать новый конфиг[/bold cyan]", style="dim")
 
     default_name = "config.new.yaml"
     target_path = questionary.text(
@@ -545,8 +572,8 @@ def manage_configs_menu():
     """Меню управления и проверки конфигов."""
     while True:
         console.clear()
-        console.rule("[bold yellow]🧩 Конфиги и проверка[/bold yellow]")
-        choice = questionary.select(
+        console.rule("[bold cyan]⚙ Конфиги и проверка[/bold cyan]", style="dim")
+        choice = q_select(
             "Выберите действие:",
             choices=[
                 f"{get_menu_emoji('📝', '[1]')} Создать новый конфиг",
@@ -554,11 +581,10 @@ def manage_configs_menu():
                 f"{get_menu_emoji('✏️', '[3]')} Редактировать существующий конфиг",
                 questionary.Separator(),
                 f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню",
-            ],
-            use_indicator=False,
+            ]
         ).ask()
 
-        if not choice or get_menu_emoji("⬅️", "[0]") in choice or choice.startswith("⬅️"):
+        if not choice or get_menu_emoji("⬅️", "[0]") in choice or choice.startswith(get_menu_emoji("⬅️")):
             return
 
         if get_menu_emoji("📝", "[1]") in choice or "Создать новый конфиг" in choice:
@@ -574,7 +600,7 @@ def manage_configs_menu():
 def edit_config_menu():
     """Редактирование существующего конфига через inline-редактор (prompt_toolkit)."""
     console.clear()
-    console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
+    console.rule(f"[bold cyan]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold cyan]", style="dim")
 
     cwd = Path('.').resolve()
     configs = sorted(list(cwd.glob('config*.yml')) + list(cwd.glob('config*.yaml')))
@@ -582,15 +608,14 @@ def edit_config_menu():
     choices.append(f"{get_menu_emoji('📂', '[+]' )} Ввести путь вручную")
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
-    selected = questionary.select(
+    selected = q_select(
         "Выберите конфиг для редактирования:",
-        choices=choices,
-        use_indicator=False,
+        choices=choices
     ).ask()
-    if not selected or selected.startswith('⬅️'):
+    if not selected or selected.startswith(get_menu_emoji("⬅️")):
         return
 
-    if selected.startswith('📂'):
+    if selected.startswith(get_menu_emoji("📂")):
         path_str = questionary.path(
             "Путь к YAML-конфигу:",
             completer=path_completer,
@@ -604,7 +629,7 @@ def edit_config_menu():
 
     # Отрисовываем заголовок и подсказку в едином стиле, как в остальных меню
     console.clear()
-    console.rule(f"[bold yellow]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold yellow]")
+    console.rule(f"[bold cyan]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold cyan]", style="dim")
     console.print(f"[bold]Файл:[/bold] [cyan]{cfg_path}[/cyan]")
     console.print(
         "[dim]Enter — изменить значение. Для переключаемых полей (Yes/No, порядок) переключение происходит сразу.[/dim]\n"
@@ -644,7 +669,7 @@ def edit_config_menu():
 def validate_config_menu():
     """Меню проверки конфига: базовая валидация и работа с бакетом."""
     console.clear()
-    console.rule(f"[bold yellow]{get_menu_emoji('🔍', '')} Проверить конфиг[/bold yellow]")
+    console.rule(f"[bold cyan]{get_menu_emoji('🔍', '')} Проверить конфиг[/bold cyan]", style="dim")
 
     # Выбор конфига (список config*.yml/yaml + ручной ввод)
     cwd = Path(".").resolve()
@@ -653,15 +678,14 @@ def validate_config_menu():
     choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
-    choice = questionary.select(
+    choice = q_select(
         "Выберите конфиг:",
-        choices=choices,
-        use_indicator=False,
+        choices=choices
     ).ask()
-    if not choice or choice.startswith("⬅️"):
+    if not choice or choice.startswith(get_menu_emoji("⬅️")):
         return
 
-    if choice.startswith("📂"):
+    if choice.startswith(get_menu_emoji("📂")):
         config_path = questionary.path(
             "Укажите путь к YAML-конфигу (например, config.yaml):",
             completer=path_completer,
@@ -815,7 +839,7 @@ def validate_config_menu():
     console.print(table)
 
     # Дополнительные действия
-    action = questionary.select(
+    action = q_select(
         "\nДополнительные действия:",
         choices=[
             f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню",
@@ -823,7 +847,7 @@ def validate_config_menu():
         ],
     ).ask()
 
-    if not action or action.startswith("⬅️"):
+    if not action or action.startswith(get_menu_emoji("⬅️")):
         # Просто выходим без лишнего подтверждения
         return
 
@@ -883,7 +907,7 @@ def validate_config_menu():
 def view_metrics_menu():
     """Меню просмотра метрик: базовый анализ CSV."""
     console.clear()
-    console.rule("[bold yellow]📊 Просмотр метрик[/bold yellow]")
+    console.rule("[bold cyan]≡ Просмотр метрик[/bold cyan]", style="dim")
 
     cwd = Path(".").resolve()
     csv_files = sorted(cwd.glob("*.csv"))
@@ -895,12 +919,11 @@ def view_metrics_menu():
     choices = [f.name for f in csv_files]
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
 
-    choice = questionary.select(
+    choice = q_select(
         "Выберите CSV с метриками:",
-        choices=choices,
-        use_indicator=False,
+        choices=choices
     ).ask()
-    if not choice or choice.startswith("⬅️"):
+    if not choice or choice.startswith(get_menu_emoji("⬅️")):
         return
 
     metrics_path = cwd / choice
@@ -997,12 +1020,26 @@ def view_metrics_menu():
     questionary.press_any_key_to_continue("Нажмите любую клавишу для возврата в меню...").ask()
 
 
+def _brand_panel():
+    """Шапка главного меню: бренд, версия, краткое описание."""
+    from rich import box
+    from rich.panel import Panel
+    try:
+        from importlib.metadata import version as _pkg_version
+        ver = _pkg_version("s3flood")
+    except Exception:
+        ver = ""
+    title = f"[bold cyan]s3flood[/bold cyan] [dim]{ver}[/dim]"
+    subtitle = "[dim]Нагрузочное тестирование S3-совместимых хранилищ[/dim]"
+    return Panel.fit(f"{title}\n{subtitle}", box=box.ROUNDED, border_style="dim", padding=(0, 2))
+
+
 def run_interactive():
     """Запуск интерактивного меню."""
     while True:
         console.clear()
-        console.rule("[bold]Меню s3flood[/bold]")
-        choice = questionary.select(
+        console.print(_brand_panel())
+        choice = q_select(
             "Выберите действие:",
             choices=[
                 f"{get_menu_emoji('🚀', '[1]')} Запустить тест",
@@ -1011,22 +1048,21 @@ def run_interactive():
                 f"{get_menu_emoji('📊', '[4]')} Просмотр метрик",
                 questionary.Separator(),
                 f"{get_menu_emoji('⬅️', '[0]')} Выход"
-            ],
-            use_indicator=False
+            ]
         ).ask()
 
-        if choice is None or choice.startswith("⬅️"):
+        if choice is None or choice.startswith(get_menu_emoji("⬅️")):
             break
 
         console.clear()
 
-        if choice.startswith("🚀"):
+        if choice.startswith(get_menu_emoji("🚀")):
             run_test_menu()
-        elif choice.startswith("📦"):
+        elif choice.startswith(get_menu_emoji("📦")):
             create_dataset_menu()
-        elif choice.startswith("🧩"):
+        elif choice.startswith(get_menu_emoji("🧩")):
             manage_configs_menu()
-        elif choice.startswith("📊"):
+        elif choice.startswith(get_menu_emoji("📊")):
             view_metrics_menu()
 
 
@@ -1034,4 +1070,4 @@ if __name__ == "__main__":
     try:
         run_interactive()
     except (KeyboardInterrupt, EOFError):
-        console.print("\n[bold yellow]Выход по запросу пользователя.[/bold yellow]")
+        console.print("\n[bold yellow]Выход по запросу пользователя.[/bold cyan]", style="dim")

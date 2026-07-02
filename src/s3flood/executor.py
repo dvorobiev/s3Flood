@@ -799,6 +799,9 @@ def run_profile(args):
     last_plain_log = 0.0
     download_phase_started = False
     mixed_phase_started = False
+    # История RPS для спарклайнов дашборда (~24 с при тике 0.5 с)
+    write_rps_history: deque = deque(maxlen=48)
+    read_rps_history: deque = deque(maxlen=48)
 
     from rich.console import Console as _RichConsole
     from rich.live import Live as _RichLive
@@ -1017,14 +1020,24 @@ def run_profile(args):
                     cycle_snapshot = cycle_count
                 with cycle_files_lock:
                     current_cycle_files = files_in_current_cycle
+                write_rps_history.append(write_rps)
+                read_rps_history.append(read_rps)
                 recent_per_type = max(1, min(getattr(args, "threads", 1), 15))
                 recent_ops_snapshot = metrics.get_recent_ops(recent_per_type * 4)
                 done_ops = [e for e in recent_ops_snapshot if e.get("done")]
                 active_ops = [e for e in recent_ops_snapshot if not e.get("done")]
                 display_ops = done_ops[-recent_per_type:] + active_ops[-recent_per_type:]
+                endpoint_disp = ", ".join(endpoints_list[:2])
+                if len(endpoints_list) > 2:
+                    endpoint_disp += f" +{len(endpoints_list) - 2}"
                 state = {
                     "profile": profile,
                     "pattern": pattern,
+                    "version": (metrics.meta or {}).get("version"),
+                    "endpoint": endpoint_disp,
+                    "bucket": args.bucket,
+                    "write_rps_history": list(write_rps_history),
+                    "read_rps_history": list(read_rps_history),
                     "burst_active": burst_active,
                     "infinite": bool(getattr(args, "infinite", False)),
                     "cycle_count": cycle_snapshot,
