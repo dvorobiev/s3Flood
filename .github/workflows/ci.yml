@@ -30,6 +30,12 @@ jobs:
           pip install pydantic>=2.7 rich>=13.7 pyyaml>=6.0 prompt-toolkit>=3.0.0 questionary>=2.0.0
           # Устанавливаем проект
           pip install -e .
+
+      - name: Run unit tests
+        run: |
+          pip install pytest
+          pytest tests/ -q
+
       - name: Start MinIO
         run: |
           docker run -d --name minio \
