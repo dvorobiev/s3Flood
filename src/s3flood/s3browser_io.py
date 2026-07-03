@@ -88,8 +88,40 @@ def parse_list_versions(payload: dict, key: str) -> list[S3Version]:
     return versions
 
 
+def parse_buckets(payload: dict) -> list[str]:
+    """Список имён бакетов из ответа list-buckets."""
+    return sorted(b.get("Name") or "" for b in payload.get("Buckets") or [])
+
+
+def parse_versioning_enabled(payload: dict) -> bool:
+    """True, если на бакете включено версионирование."""
+    return payload.get("Status") == "Enabled"
+
+
+def parse_version_counts(payload: dict) -> dict[str, int]:
+    """Счётчик версий по ключам (включая delete markers) из list-object-versions."""
+    counts: dict[str, int] = {}
+    for section in ("Versions", "DeleteMarkers"):
+        for v in payload.get(section) or []:
+            key = v.get("Key") or ""
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _bucket_name(bucket: str) -> str:
     return bucket.replace("s3://", "").split("/")[0]
+
+
+def build_list_buckets_cmd(endpoint: str) -> list[str]:
+    return ["aws", "s3api", "list-buckets", "--endpoint-url", endpoint]
+
+
+def build_versioning_status_cmd(bucket: str, endpoint: str) -> list[str]:
+    return [
+        "aws", "s3api", "get-bucket-versioning",
+        "--bucket", _bucket_name(bucket),
+        "--endpoint-url", endpoint,
+    ]
 
 
 def build_list_cmd(bucket: str, prefix: str, endpoint: str) -> list[str]:

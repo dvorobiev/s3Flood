@@ -1,14 +1,16 @@
 """Двухпанельный TUI-браузер бакета (стиль Midnight Commander).
 
-Слева — локальная файловая система, справа — бакет из конфига.
-Enter на объекте бакета открывает его версии как «папку»; F5 копирует между
-панелями (upload/download, в режиме версий — конкретную версию), F6
-восстанавливает версию, F8 удаляет. Построен на prompt_toolkit по образцу
-ConfigEditorApp — тот же стек и стилистика, что и остальной TUI s3flood.
+Слева — локальная файловая система, справа — S3. Из корня бакета «..» ведёт
+к списку бакетов. Enter на объекте открывает его версии как «папку».
+Space выделяет несколько объектов; F5 копирует, F6 перемещает (в режиме
+версий — откатывает объект к версии), F8 удаляет — пакетно, с прогрессом.
+Построен на prompt_toolkit по образцу ConfigEditorApp — тот же стек и
+стилистика, что и остальной TUI s3flood.
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,10 +30,16 @@ from .s3browser_io import (
     S3Version,
     build_delete_cmd,
     build_get_object_cmd,
+    build_list_buckets_cmd,
     build_restore_cmd,
     build_upload_cmd,
+    build_versioning_status_cmd,
+    build_versions_cmd,
     list_prefix,
     list_versions,
+    parse_buckets,
+    parse_version_counts,
+    parse_versioning_enabled,
     run_aws,
 )
 
@@ -45,6 +53,7 @@ class Row:
     size: int = 0
     meta: str = ""
     payload: object = None
+    marked: bool = False
 
 
 @dataclass
@@ -53,7 +62,8 @@ class Panel:
     rows: list[Row] = field(default_factory=list)
     selection: int = 0
     loading: bool = False
-    # bucket-панель: "list" — листинг префикса, "versions" — версии объекта
+    # bucket-панель: "list" — листинг префикса, "versions" — версии объекта,
+    # "buckets" — выбор бакета
     mode: str = "list"
 
     def selected(self) -> Optional[Row]:
@@ -63,6 +73,13 @@ class Panel:
 
     def clamp(self) -> None:
         self.selection = max(0, min(self.selection, len(self.rows) - 1))
+
+    def marked_rows(self) -> list[Row]:
+        return [r for r in self.rows if r.marked]
+
+    def clear_marks(self) -> None:
+        for r in self.rows:
+            r.marked = False
 
 
 def build_local_rows(path: Path) -> list[Row]:
@@ -89,20 +106,33 @@ def build_local_rows(path: Path) -> list[Row]:
     return rows + dirs + files
 
 
-def rows_from_entries(entries: list[S3Entry], prefix: str) -> list[Row]:
-    """Строки бакет-панели из листинга префикса."""
-    rows: list[Row] = []
-    if prefix:
-        rows.append(Row(name="..", is_dir=True))
+def rows_from_entries(
+    entries: list[S3Entry], prefix: str, version_counts: dict[str, int] | None = None
+) -> list[Row]:
+    """Строки бакет-панели из листинга префикса.
+
+    «..» есть всегда: из корня бакета она ведёт к списку бакетов.
+    """
+    rows: list[Row] = [Row(name="..", is_dir=True)]
+    counts = version_counts or {}
     for e in entries:
         if e.is_dir:
             rows.append(Row(name=e.name, is_dir=True, payload=e))
         else:
-            rows.append(Row(
-                name=e.name, size=e.size,
-                meta=e.last_modified[:16].replace("T", " "),
-                payload=e,
-            ))
+            meta = e.last_modified[:16].replace("T", " ")
+            n = counts.get(e.key, 1)
+            if n > 1:
+                meta += f"  ⊙ {n}"
+            rows.append(Row(name=e.name, size=e.size, meta=meta, payload=e))
+    return rows
+
+
+def rows_from_buckets(names: list[str], current: str) -> list[Row]:
+    """Строки бакет-панели в режиме выбора бакета."""
+    rows: list[Row] = []
+    for name in names:
+        meta = "← текущий" if name == current else ""
+        rows.append(Row(name=name, is_dir=True, meta=meta, payload=name))
     return rows
 
 
@@ -137,10 +167,13 @@ def render_panel_lines(panel: Panel, width: int, focused: bool) -> list[tuple[st
     for idx, row in enumerate(panel.rows):
         is_sel = idx == panel.selection
         cursor = "»" if is_sel and focused else " "
+        mark = "*" if row.marked else " "
         size_disp = "" if row.is_dir else format_bytes(row.size)
-        name_width = max(width - 30, 12)
-        text = f"{cursor} {row.name:<{name_width}.{name_width}} {size_disp:>9} {row.meta}"
+        name_width = max(width - 32, 12)
+        text = f"{cursor}{mark} {row.name:<{name_width}.{name_width}} {size_disp:>9} {row.meta}"
         style = "class:row.dir" if row.is_dir else "class:row"
+        if row.marked:
+            style = "class:row.marked"
         if is_sel and focused:
             style = "class:row.selected"
         elif is_sel:
@@ -160,6 +193,9 @@ class BucketBrowserApp:
         self.local_path = start_dir.resolve()
         self.prefix = prefix
         self.versions_key: Optional[str] = None
+        # версионирование бакетов: имя -> bool (кэш)
+        self._versioning: dict[str, bool] = {}
+        self._load_gen = 0  # защита от устаревших async-ответов
 
         self.left = Panel(title=str(self.local_path), rows=build_local_rows(self.local_path))
         self.right = Panel(title=self._bucket_title(), loading=True)
@@ -200,8 +236,9 @@ class BucketBrowserApp:
         kb.add("pagedown", filter=no_confirm)(self._key_pgdn)
         kb.add("enter", filter=no_confirm)(self._key_enter)
         kb.add("backspace", filter=no_confirm)(self._key_back)
+        kb.add("space", filter=no_confirm)(self._key_mark)
         kb.add("f5", filter=no_confirm)(self._key_copy)
-        kb.add("f6", filter=no_confirm)(self._key_restore)
+        kb.add("f6", filter=no_confirm)(self._key_move_or_restore)
         kb.add("f8", filter=no_confirm)(self._key_delete)
         kb.add("r", filter=no_confirm)(self._key_refresh)
         kb.add("q", filter=no_confirm)(self._key_quit)
@@ -226,6 +263,7 @@ class BucketBrowserApp:
                 "row.dir": "fg:#00d7ff",
                 "row.selected": "reverse",
                 "row.cursor": "underline",
+                "row.marked": "fg:ansiyellow bold",
                 "separator": "fg:#585858",
                 "status": "",
                 "status.error": "fg:ansired bold",
@@ -239,9 +277,14 @@ class BucketBrowserApp:
     # ---------- рендер ----------
 
     def _bucket_title(self) -> str:
+        if self.right.mode == "buckets" if hasattr(self, "right") else False:
+            return "S3: выбор бакета"
+        suffix = ""
+        if self._versioning.get(self.bucket) is False:
+            suffix = " · versioning off"
         if self.versions_key:
-            return f"{self.bucket}:/{self.versions_key} ⊙ версии"
-        return f"{self.bucket}:/{self.prefix}"
+            return f"{self.bucket}:/{self.versions_key} ⊙ версии{suffix}"
+        return f"{self.bucket}:/{self.prefix}{suffix}"
 
     def _panel_width(self) -> int:
         try:
@@ -269,7 +312,14 @@ class BucketBrowserApp:
         return [("class:status", f" {self.endpoint} · {self.status_msg} ")]
 
     def _render_keybar(self):
-        keys = " Tab Панель  Enter Открыть  F5 Копировать  F6 Восстановить  F8 Удалить  r Обновить  q Выход"
+        if self.right.mode == "buckets" and self.focus_right:
+            keys = " Enter Выбрать бакет  Tab Панель  r Обновить  q Выход"
+        elif self.right.mode == "versions" and self.focus_right:
+            keys = (" Enter/.. Назад  F5 Скачать версию  F6 Откатить к версии"
+                    "  F8 Удалить версию  q Выход")
+        else:
+            keys = (" Tab Панель  Enter Открыть  Space Выделить  F5 Копировать"
+                    "  F6 Переместить  F8 Удалить  r Обновить  q Выход")
         return [("class:keybar", keys)]
 
     # ---------- панели/фокус ----------
@@ -307,7 +357,24 @@ class BucketBrowserApp:
 
     def _key_refresh(self, event) -> None:
         self.reload_local()
-        self._spawn(self._load_bucket())
+        if self.right.mode == "buckets":
+            self._spawn(self._load_buckets())
+        elif self.right.mode == "versions" and self.versions_key:
+            self._spawn(self._load_versions(self.versions_key))
+        else:
+            self._spawn(self._load_bucket())
+
+    def _key_mark(self, event) -> None:
+        """Space: выделить/снять выделение файла и перейти ниже (как в MC)."""
+        p = self._active()
+        row = p.selected()
+        if row is None or row.name == ".." or p.mode in ("versions", "buckets") and self.focus_right:
+            return
+        if row.is_dir:
+            return
+        row.marked = not row.marked
+        p.selection += 1
+        p.clamp()
 
     # ---------- навигация ----------
 
@@ -324,6 +391,13 @@ class BucketBrowserApp:
                 self.reload_local()
             return
         # бакет-панель
+        if self.right.mode == "buckets":
+            if isinstance(row.payload, str):
+                self.bucket = row.payload
+                self.prefix = ""
+                self.versions_key = None
+                self._spawn(self._load_bucket())
+            return
         if self.right.mode == "versions":
             if row.name == "..":
                 self.versions_key = None
@@ -331,7 +405,10 @@ class BucketBrowserApp:
                 self._spawn(self._load_bucket())
             return
         if row.name == "..":
-            self._go_prefix_up()
+            if self.prefix:
+                self._go_prefix_up()
+            else:
+                self._spawn(self._load_buckets())
         elif row.is_dir and isinstance(row.payload, S3Entry):
             self.prefix = row.payload.key
             self._spawn(self._load_bucket())
@@ -347,74 +424,98 @@ class BucketBrowserApp:
             self.versions_key = None
             self.right.mode = "list"
             self._spawn(self._load_bucket())
-        else:
+        elif self.right.mode == "buckets":
+            self._spawn(self._load_bucket())
+        elif self.prefix:
             self._go_prefix_up()
+        else:
+            self._spawn(self._load_buckets())
 
     def _go_prefix_up(self) -> None:
-        if not self.prefix:
-            return
         parts = self.prefix.rstrip("/").split("/")
         self.prefix = "/".join(parts[:-1]) + "/" if len(parts) > 1 else ""
         self._spawn(self._load_bucket())
 
+    # ---------- выбор целей операций ----------
+
+    def _targets(self, panel: Panel) -> list[Row]:
+        marked = [r for r in panel.marked_rows() if not r.is_dir]
+        if marked:
+            return marked
+        row = panel.selected()
+        if row is None or row.name == ".." or row.is_dir:
+            return []
+        return [row]
+
     # ---------- операции ----------
 
     def _key_copy(self, event) -> None:
-        row = self._active().selected()
-        if row is None or row.name == "..":
+        if self.focus_right and self.right.mode == "buckets":
             return
-        if not self.focus_right:
-            if row.is_dir:
-                self.status_err = "Копирование каталогов не поддерживается (v1)"
-                return
-            local = row.payload
-            key = self.prefix + row.name
-            self._spawn(self._op_upload(local, key))
-        elif self.right.mode == "versions":
-            if isinstance(row.payload, S3Version) and not row.payload.is_delete_marker:
+        if self.focus_right and self.right.mode == "versions":
+            row = self.right.selected()
+            if isinstance(row.payload if row else None, S3Version) and not row.payload.is_delete_marker:
                 v = row.payload
                 base = Path(self.versions_key or "object").name
                 target = self.local_path / f"{base}.{v.version_id[:8]}"
-                self._spawn(self._op_download(self.versions_key, target, v.version_id))
-        else:
-            if row.is_dir:
-                self.status_err = "Копирование префиксов не поддерживается (v1)"
+                self._spawn(self._op_download_version(self.versions_key, target, v.version_id))
+            return
+        panel = self._active()
+        targets = self._targets(panel)
+        if not targets:
+            self.status_err = "Нечего копировать: выберите файл (Space — несколько)"
+            return
+        self._spawn(self._op_transfer_batch(targets, move=False, from_local=not self.focus_right))
+
+    def _key_move_or_restore(self, event) -> None:
+        if self.focus_right and self.right.mode == "buckets":
+            return
+        if self.focus_right and self.right.mode == "versions":
+            row = self.right.selected()
+            if row is None or not isinstance(row.payload, S3Version):
                 return
-            entry = row.payload
-            target = self.local_path / Path(entry.key).name
-            self._spawn(self._op_download(entry.key, target, None))
+            v = row.payload
+            if v.is_delete_marker:
+                self.status_err = "Delete marker нельзя восстановить как версию"
+                return
+            if v.is_latest:
+                self.status_msg = "Эта версия уже latest"
+                return
+            prompt = f"Откатить {self.versions_key} к версии {v.version_id[:8]}?"
+            self.confirm = (prompt, self._op_restore(self.versions_key, v.version_id))
+            return
+        panel = self._active()
+        targets = self._targets(panel)
+        if not targets:
+            self.status_err = "Нечего перемещать: выберите файл (Space — несколько)"
+            return
+        src = "локальные файлы будут удалены" if not self.focus_right else "объекты будут удалены из бакета"
+        prompt = f"Переместить {len(targets)} объект(ов)? После копирования {src}."
+        self.confirm = (
+            prompt,
+            self._op_transfer_batch(targets, move=True, from_local=not self.focus_right),
+        )
 
     def _key_delete(self, event) -> None:
         if not self.focus_right:
             self.status_err = "Удаление локальных файлов из браузера отключено"
             return
-        row = self.right.selected()
-        if row is None or row.name == "..":
+        if self.right.mode == "buckets":
             return
-        if self.right.mode == "versions" and isinstance(row.payload, S3Version):
+        if self.right.mode == "versions":
+            row = self.right.selected()
+            if row is None or row.name == ".." or not isinstance(row.payload, S3Version):
+                return
             v = row.payload
             prompt = f"Удалить версию {v.version_id[:8]} объекта {self.versions_key}?"
-            self.confirm = (prompt, self._op_delete(self.versions_key, v.version_id))
-        elif isinstance(row.payload, S3Entry) and not row.is_dir:
-            prompt = f"Удалить объект {row.payload.key}?"
-            self.confirm = (prompt, self._op_delete(row.payload.key, None))
-
-    def _key_restore(self, event) -> None:
-        if not (self.focus_right and self.right.mode == "versions"):
-            self.status_err = "F6 работает в режиме версий (Enter на объекте)"
+            self.confirm = (prompt, self._op_delete_batch([(self.versions_key, v.version_id)]))
             return
-        row = self.right.selected()
-        if row is None or not isinstance(row.payload, S3Version):
+        targets = self._targets(self.right)
+        if not targets:
             return
-        v = row.payload
-        if v.is_delete_marker:
-            self.status_err = "Delete marker нельзя восстановить как версию"
-            return
-        if v.is_latest:
-            self.status_msg = "Эта версия уже latest"
-            return
-        prompt = f"Восстановить {self.versions_key} к версии {v.version_id[:8]}?"
-        self.confirm = (prompt, self._op_restore(self.versions_key, v.version_id))
+        keys = [(r.payload.key, None) for r in targets if isinstance(r.payload, S3Entry)]
+        prompt = f"Удалить {len(keys)} объект(ов) из бакета?"
+        self.confirm = (prompt, self._op_delete_batch(keys))
 
     def _key_confirm_yes(self, event) -> None:
         if self.confirm:
@@ -446,28 +547,81 @@ class BucketBrowserApp:
         self.left.title = str(self.local_path)
         self.left.clamp()
 
+    async def _ensure_versioning_status(self) -> None:
+        if self.bucket in self._versioning:
+            return
+        res = await run_aws(build_versioning_status_cmd(self.bucket, self.endpoint), self.env)
+        if res.ok:
+            self._versioning[self.bucket] = parse_versioning_enabled(res.payload)
+
     async def _load_bucket(self) -> None:
+        self._load_gen += 1
+        gen = self._load_gen
         self.right.loading = True
+        self.right.mode = "list"
         self.right.title = self._bucket_title()
         self._invalidate()
+        await self._ensure_versioning_status()
         res, entries = await list_prefix(self.bucket, self.prefix, self.endpoint, self.env)
+        if gen != self._load_gen:
+            return
+        self.right.loading = False
+        if not res.ok:
+            self.status_err = res.error
+            self.right.rows = [Row(name="..", is_dir=True)]
+        else:
+            self.right.rows = rows_from_entries(entries, self.prefix)
+            self.status_msg = f"{len(entries)} элементов"
+            # счётчики версий подгружаем отдельно, не блокируя листинг
+            self._spawn(self._load_version_counts(gen))
+        self.right.title = self._bucket_title()
+        self.right.selection = 0
+        self._invalidate()
+
+    async def _load_version_counts(self, gen: int) -> None:
+        if self._versioning.get(self.bucket) is False:
+            return
+        res = await run_aws(build_versions_cmd(self.bucket, self.prefix, self.endpoint), self.env)
+        if not res.ok or gen != self._load_gen:
+            return
+        counts = parse_version_counts(res.payload)
+        for row in self.right.rows:
+            if isinstance(row.payload, S3Entry) and not row.is_dir:
+                n = counts.get(row.payload.key, 1)
+                if n > 1 and "⊙" not in row.meta:
+                    row.meta += f"  ⊙ {n}"
+        self._invalidate()
+
+    async def _load_buckets(self) -> None:
+        self._load_gen += 1
+        gen = self._load_gen
+        self.right.loading = True
+        self.right.mode = "buckets"
+        self.right.title = "S3: выбор бакета"
+        self._invalidate()
+        res = await run_aws(build_list_buckets_cmd(self.endpoint), self.env)
+        if gen != self._load_gen:
+            return
         self.right.loading = False
         if not res.ok:
             self.status_err = res.error
             self.right.rows = []
         else:
-            self.right.mode = "list"
-            self.right.rows = rows_from_entries(entries, self.prefix)
-            self.status_msg = f"{len(entries)} элементов"
-        self.right.title = self._bucket_title()
+            names = parse_buckets(res.payload)
+            self.right.rows = rows_from_buckets(names, self.bucket)
+            self.status_msg = f"{len(names)} бакетов"
         self.right.selection = 0
         self._invalidate()
 
     async def _load_versions(self, key: str) -> None:
+        self._load_gen += 1
+        gen = self._load_gen
         self.right.loading = True
         self.right.title = self._bucket_title()
         self._invalidate()
         res, versions = await list_versions(self.bucket, key, self.endpoint, self.env)
+        if gen != self._load_gen:
+            return
         self.right.loading = False
         if not res.ok:
             self.status_err = res.error
@@ -476,24 +630,59 @@ class BucketBrowserApp:
         else:
             self.right.mode = "versions"
             self.right.rows = rows_from_versions(versions)
-            self.status_msg = f"{len(versions)} версий"
+            if len(versions) <= 1 and self._versioning.get(self.bucket) is False:
+                self.status_msg = ("версий нет: на бакете выключено версионирование "
+                                   "(put-bucket-versioning Status=Enabled)")
+            else:
+                self.status_msg = f"{len(versions)} версий"
         self.right.title = self._bucket_title()
         self.right.selection = 0
         self._invalidate()
 
-    async def _op_upload(self, local: Path, key: str) -> None:
-        self.status_msg = f"↑ {key}…"
-        self._invalidate()
-        res = await run_aws(build_upload_cmd(str(local), self.bucket, key, self.endpoint), self.env)
-        if res.ok:
-            self.status_msg = f"↑ загружено: {key}"
-            await self._load_bucket()
-        else:
-            self.status_err = res.error
+    async def _op_transfer_batch(self, targets: list[Row], *, move: bool, from_local: bool) -> None:
+        """Пакетное копирование/перемещение с прогрессом n/m."""
+        total = len(targets)
+        verb = "Перемещение" if move else "Копирование"
+        errors = 0
+        for i, row in enumerate(targets, start=1):
+            arrow = "↑" if from_local else "↓"
+            self.status_msg = f"{verb} {arrow} {i}/{total}: {row.name}…"
+            self._invalidate()
+            if from_local:
+                local: Path = row.payload
+                key = self.prefix + row.name
+                res = await run_aws(
+                    build_upload_cmd(str(local), self.bucket, key, self.endpoint), self.env
+                )
+                if res.ok and move:
+                    try:
+                        os.remove(local)
+                    except OSError as exc:
+                        self.status_err = f"Не удалось удалить {local.name}: {exc}"
+                        errors += 1
+            else:
+                entry: S3Entry = row.payload
+                target = self.local_path / Path(entry.key).name
+                res = await run_aws(
+                    build_get_object_cmd(self.bucket, entry.key, str(target), self.endpoint),
+                    self.env,
+                )
+                if res.ok and move:
+                    res = await run_aws(
+                        build_delete_cmd(self.bucket, entry.key, self.endpoint), self.env
+                    )
+            if not res.ok:
+                errors += 1
+                self.status_err = res.error
+        (self.left if from_local else self.right).clear_marks()
+        self.reload_local()
+        await self._load_bucket()
+        done = total - errors
+        self.status_msg = f"{verb}: готово {done}/{total}" + (f", ошибок {errors}" if errors else "")
         self._invalidate()
 
-    async def _op_download(self, key: str, target: Path, version_id: str | None) -> None:
-        self.status_msg = f"↓ {target.name}…"
+    async def _op_download_version(self, key: str, target: Path, version_id: str) -> None:
+        self.status_msg = f"↓ версия {version_id[:8]} → {target.name}…"
         self._invalidate()
         cmd = build_get_object_cmd(self.bucket, key, str(target), self.endpoint, version_id)
         res = await run_aws(cmd, self.env)
@@ -504,22 +693,27 @@ class BucketBrowserApp:
             self.status_err = res.error
         self._invalidate()
 
-    async def _op_delete(self, key: str, version_id: str | None) -> None:
-        res = await run_aws(build_delete_cmd(self.bucket, key, self.endpoint, version_id), self.env)
-        if res.ok:
-            self.status_msg = "Удалено"
-            if self.right.mode == "versions" and self.versions_key:
-                await self._load_versions(self.versions_key)
-            else:
-                await self._load_bucket()
+    async def _op_delete_batch(self, keys: list[tuple[str, str | None]]) -> None:
+        total = len(keys)
+        errors = 0
+        for i, (key, version_id) in enumerate(keys, start=1):
+            self.status_msg = f"Удаление {i}/{total}: {Path(key).name}…"
+            self._invalidate()
+            res = await run_aws(build_delete_cmd(self.bucket, key, self.endpoint, version_id), self.env)
+            if not res.ok:
+                errors += 1
+                self.status_err = res.error
+        if self.right.mode == "versions" and self.versions_key:
+            await self._load_versions(self.versions_key)
         else:
-            self.status_err = res.error
+            await self._load_bucket()
+        self.status_msg = f"Удалено {total - errors}/{total}" + (f", ошибок {errors}" if errors else "")
         self._invalidate()
 
     async def _op_restore(self, key: str, version_id: str) -> None:
         res = await run_aws(build_restore_cmd(self.bucket, key, version_id, self.endpoint), self.env)
         if res.ok:
-            self.status_msg = f"Восстановлено к версии {version_id[:8]}"
+            self.status_msg = f"Откачено к версии {version_id[:8]} (создана новая latest-копия)"
             await self._load_versions(key)
         else:
             self.status_err = res.error

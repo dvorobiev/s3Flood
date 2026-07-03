@@ -32,9 +32,23 @@ class TestRowsFromEntries:
         assert rows[1].name == "small/"
         assert rows[2].size == 2048
 
-    def test_no_parent_at_root(self):
+    def test_parent_present_at_bucket_root_for_bucket_switch(self):
+        # в корне бакета ".." ведёт к списку бакетов
         rows = rows_from_entries([], prefix="")
-        assert rows == []
+        assert rows and rows[0].name == ".."
+
+    def test_version_badge_from_counts(self):
+        entries = [
+            S3Entry(name="a.bin", key="data/a.bin", is_dir=False, size=1,
+                    last_modified="2026-07-01T11:00:00Z"),
+            S3Entry(name="b.bin", key="data/b.bin", is_dir=False, size=1,
+                    last_modified="2026-07-01T11:00:00Z"),
+        ]
+        counts = {"data/a.bin": 3, "data/b.bin": 1}
+        rows = rows_from_entries(entries, prefix="data/", version_counts=counts)
+        by_name = {r.name: r for r in rows}
+        assert "⊙ 3" in by_name["a.bin"].meta
+        assert "⊙" not in by_name["b.bin"].meta
 
 
 class TestRowsFromVersions:
@@ -89,3 +103,14 @@ class TestRenderPanelLines:
         panel = Panel(title="t", rows=[Row(name="x" * 200)], selection=0)
         lines = render_panel_lines(panel, width=30, focused=True)
         assert all(len(text.rstrip("\n")) <= 30 for _s, text in lines)
+
+    def test_marked_rows_have_star_and_style(self):
+        panel = Panel(title="t", rows=[
+            Row(name="a.bin", marked=True),
+            Row(name="b.bin"),
+        ], selection=1)
+        lines = render_panel_lines(panel, width=60, focused=True)
+        a_style, a_text = [(s, t) for s, t in lines if "a.bin" in t][0]
+        b_style, b_text = [(s, t) for s, t in lines if "b.bin" in t][0]
+        assert "*" in a_text and "marked" in a_style
+        assert "*" not in b_text

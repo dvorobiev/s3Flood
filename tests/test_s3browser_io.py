@@ -1,13 +1,63 @@
 from s3flood.s3browser_io import (
     build_delete_cmd,
     build_get_object_cmd,
+    build_list_buckets_cmd,
     build_list_cmd,
     build_restore_cmd,
     build_upload_cmd,
+    build_versioning_status_cmd,
     build_versions_cmd,
+    parse_buckets,
     parse_list_objects,
     parse_list_versions,
+    parse_version_counts,
+    parse_versioning_enabled,
 )
+
+
+class TestBuckets:
+    def test_parse_buckets_sorted(self):
+        payload = {"Buckets": [{"Name": "zeta"}, {"Name": "alpha"}]}
+        assert parse_buckets(payload) == ["alpha", "zeta"]
+
+    def test_parse_buckets_empty(self):
+        assert parse_buckets({}) == []
+
+    def test_list_buckets_cmd(self):
+        cmd = build_list_buckets_cmd("http://e")
+        assert "list-buckets" in cmd and "--endpoint-url" in cmd
+
+
+class TestVersioningStatus:
+    def test_enabled(self):
+        assert parse_versioning_enabled({"Status": "Enabled"}) is True
+
+    def test_disabled_or_absent(self):
+        assert parse_versioning_enabled({"Status": "Suspended"}) is False
+        assert parse_versioning_enabled({}) is False
+
+    def test_cmd(self):
+        cmd = build_versioning_status_cmd("b", "http://e")
+        assert "get-bucket-versioning" in cmd
+
+
+class TestParseVersionCounts:
+    PAYLOAD = {
+        "Versions": [
+            {"Key": "data/a.bin", "VersionId": "v1"},
+            {"Key": "data/a.bin", "VersionId": "v2"},
+            {"Key": "data/b.bin", "VersionId": "x1"},
+        ],
+        "DeleteMarkers": [{"Key": "data/a.bin", "VersionId": "m1"}],
+    }
+
+    def test_counts_per_key_including_markers(self):
+        counts = parse_version_counts(self.PAYLOAD)
+        assert counts["data/a.bin"] == 3
+        assert counts["data/b.bin"] == 1
+
+    def test_empty(self):
+        assert parse_version_counts({}) == {}
 
 
 class TestParseListObjects:
