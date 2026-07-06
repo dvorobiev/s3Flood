@@ -108,6 +108,29 @@ class RunSettings:
         return Namespace(**asdict(self))
 
 
+# Ключи, по которым YAML-файл распознаётся как конфиг прогона
+KNOWN_CONFIG_KEYS = {"endpoint", "endpoints", "bucket", "profile"}
+
+
+def discover_configs(cwd: Path) -> list[Path]:
+    """YAML-файлы рабочей папки, похожие на конфиги прогона.
+
+    Конфиг — это маппинг с секцией run (маппингом) либо хотя бы одним из
+    KNOWN_CONFIG_KEYS на верхнем уровне. Имя файла роли не играет.
+    """
+    found: list[Path] = []
+    for path in list(cwd.glob("*.yml")) + list(cwd.glob("*.yaml")):
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if isinstance(data.get("run"), dict) or KNOWN_CONFIG_KEYS & set(data):
+            found.append(path)
+    return sorted(found)
+
+
 def load_run_config(path: str) -> RunConfigModel:
     config_path = Path(path).expanduser()
     if not config_path.exists():

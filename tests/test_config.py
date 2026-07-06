@@ -3,7 +3,7 @@ from argparse import Namespace
 import pytest
 
 from s3flood.app_settings import save_app_settings
-from s3flood.config import RunConfigModel, resolve_run_settings
+from s3flood.config import RunConfigModel, discover_configs, resolve_run_settings
 
 
 def make_config(**over):
@@ -79,3 +79,31 @@ class TestDataDirPriority:
         settings = resolve_run_settings(_min_args(), config)
         assert settings.data_dir == "./data"
         assert "data_dir" in capsys.readouterr().err
+
+
+class TestDiscoverConfigs:
+    def test_finds_flat_and_run_section_configs(self, tmp_path):
+        (tmp_path / "kazan.yml").write_text("endpoint: http://h:9000\nbucket: b\n")
+        (tmp_path / "tape.yaml").write_text("run:\n  bucket: b\n")
+        (tmp_path / "config.old.yaml").write_text("profile: write\n")
+        found = {p.name for p in discover_configs(tmp_path)}
+        assert found == {"kazan.yml", "tape.yaml", "config.old.yaml"}
+
+    def test_skips_non_config_yaml(self, tmp_path):
+        (tmp_path / "list.yml").write_text("- a\n- b\n")
+        (tmp_path / "scalar.yml").write_text("42\n")
+        (tmp_path / "other.yml").write_text("name: x\nvalue: y\n")
+        (tmp_path / "broken.yml").write_text("{{not yaml")
+        (tmp_path / "empty.yml").write_text("")
+        assert discover_configs(tmp_path) == []
+
+    def test_dotfile_settings_not_listed(self, tmp_path):
+        (tmp_path / ".s3flood.yml").write_text("dataset_dir: /x\n")
+        (tmp_path / "real.yml").write_text("bucket: b\n")
+        found = [p.name for p in discover_configs(tmp_path)]
+        assert found == ["real.yml"]
+
+    def test_sorted_output(self, tmp_path):
+        (tmp_path / "b.yml").write_text("bucket: b\n")
+        (tmp_path / "a.yaml").write_text("bucket: b\n")
+        assert [p.name for p in discover_configs(tmp_path)] == ["a.yaml", "b.yml"]

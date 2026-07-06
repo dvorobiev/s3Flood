@@ -19,7 +19,7 @@ from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.completion import PathCompleter
 from prompt_toolkit.formatted_text import HTML
 
-from .config import load_run_config, resolve_run_settings
+from .config import discover_configs, load_run_config, resolve_run_settings
 from .config_editor import build_default_config, edit_config_interactively
 from .dataset import plan_and_generate
 from .executor import run_profile, get_spinner
@@ -164,7 +164,7 @@ def run_test_menu():
 
     # Ищем YAML-конфиги в текущей директории
     cwd = Path(".").resolve()
-    configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
+    configs = discover_configs(cwd)
     choices = [str(cfg.name) for cfg in configs]
     choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
     # Разделяем список конфигов и пункт возврата в меню, как в других подменю
@@ -531,7 +531,7 @@ def create_config_wizard():
     console.clear()
     console.rule(f"[bold cyan]{get_menu_emoji('📝', '')} Создать новый конфиг[/bold cyan]", style="dim")
 
-    default_name = "config.new.yaml"
+    default_name = "new.yml"
     target_path = questionary.text(
         "Имя файла конфига:",
         default=default_name,
@@ -601,7 +601,7 @@ def edit_config_menu():
     console.rule(f"[bold cyan]{get_menu_emoji('✏️', '')} Редактировать конфиг[/bold cyan]", style="dim")
 
     cwd = Path('.').resolve()
-    configs = sorted(list(cwd.glob('config*.yml')) + list(cwd.glob('config*.yaml')))
+    configs = discover_configs(cwd)
     choices = [str(cfg.name) for cfg in configs]
     choices.append(f"{get_menu_emoji('📂', '[+]' )} Ввести путь вручную")
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
@@ -671,7 +671,7 @@ def validate_config_menu():
 
     # Выбор конфига (список config*.yml/yaml + ручной ввод)
     cwd = Path(".").resolve()
-    configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
+    configs = discover_configs(cwd)
     choices = [str(cfg.name) for cfg in configs]
     choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
     choices.append(f"{get_menu_emoji('⬅️', '[0]')} Вернуться в главное меню")
@@ -1051,7 +1051,7 @@ def browse_bucket_menu():
     console.rule("[bold cyan]⇄ Браузер бакета[/bold cyan]", style="dim")
 
     cwd = Path(".").resolve()
-    configs = sorted(list(cwd.glob("config*.yml")) + list(cwd.glob("config*.yaml")))
+    configs = discover_configs(cwd)
     choices = [str(cfg.name) for cfg in configs]
     choices.append(f"{get_menu_emoji('📂', '[+]')} Ввести путь вручную")
     choices.append(questionary.Separator())
