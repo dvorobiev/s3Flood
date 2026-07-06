@@ -673,7 +673,7 @@ def validate_config_menu():
     console.clear()
     console.rule(f"[bold cyan]{get_menu_emoji('🔍', '')} Проверить конфиг[/bold cyan]", style="dim")
 
-    # Выбор конфига (список config*.yml/yaml + ручной ввод)
+    # Выбор конфига (конфиги распознаются по содержимому через discover_configs + ручной ввод)
     cwd = Path(".").resolve()
     configs = discover_configs(cwd)
     choices = [str(cfg.name) for cfg in configs]
