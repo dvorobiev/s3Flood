@@ -98,7 +98,8 @@ class TestDiscoverConfigs:
         assert discover_configs(tmp_path) == []
 
     def test_dotfile_settings_not_listed(self, tmp_path):
-        (tmp_path / ".s3flood.yml").write_text("dataset_dir: /x\n")
+        # даже если содержимое дотфайла похоже на конфиг — он скрытый, в список не попадает
+        (tmp_path / ".s3flood.yml").write_text("bucket: b\ndataset_dir: /x\n")
         (tmp_path / "real.yml").write_text("bucket: b\n")
         found = [p.name for p in discover_configs(tmp_path)]
         assert found == ["real.yml"]

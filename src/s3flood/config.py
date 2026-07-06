@@ -117,9 +117,13 @@ def discover_configs(cwd: Path) -> list[Path]:
 
     Конфиг — это маппинг с секцией run (маппингом) либо хотя бы одним из
     KNOWN_CONFIG_KEYS на верхнем уровне. Имя файла роли не играет.
+    Скрытые файлы (dotfiles) исключаются.
     """
     found: list[Path] = []
     for path in list(cwd.glob("*.yml")) + list(cwd.glob("*.yaml")):
+        # pathlib.glob матчит dotfiles, явно их пропускаем
+        if path.name.startswith("."):
+            continue
         try:
             data = yaml.safe_load(path.read_text(encoding="utf-8"))
         except (OSError, yaml.YAMLError):
