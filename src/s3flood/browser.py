@@ -45,6 +45,19 @@ from .s3browser_io import (
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+# Заголовки колонок панели по режимам (имя, размер, дата/метки)
+COLUMN_HEADERS: dict[str, tuple[str, str, str]] = {
+    "list": ("Имя", "Размер", "Дата"),
+    "versions": ("Версия", "Размер", "Дата / метки"),
+    "buckets": ("Бакет", "", ""),
+}
+
+
+def format_columns(name: str, size: str, meta: str, width: int) -> str:
+    """Одна строка панели: имя │ размер │ мета — с фиксированной сеткой колонок."""
+    name_w = max(width - 33, 12)
+    return f"{name:<{name_w}.{name_w}} │{size:>9} │ {meta}"
+
 
 @dataclass
 class Row:
@@ -164,13 +177,15 @@ def render_panel_lines(panel: Panel, width: int, focused: bool) -> list[tuple[st
         lines.append(("class:loading", cut(f" {frame} загрузка…") + "\n"))
         return lines
 
+    headers = COLUMN_HEADERS.get(panel.mode, COLUMN_HEADERS["list"])
+    lines.append(("class:panel.columns", cut("   " + format_columns(*headers, width)) + "\n"))
+
     for idx, row in enumerate(panel.rows):
         is_sel = idx == panel.selection
         cursor = "»" if is_sel and focused else " "
         mark = "*" if row.marked else " "
         size_disp = "" if row.is_dir else format_bytes(row.size)
-        name_width = max(width - 32, 12)
-        text = f"{cursor}{mark} {row.name:<{name_width}.{name_width}} {size_disp:>9} {row.meta}"
+        text = f"{cursor}{mark} " + format_columns(row.name, size_disp, row.meta, width)
         style = "class:row.dir" if row.is_dir else "class:row"
         if row.marked:
             style = "class:row.marked"
@@ -259,6 +274,7 @@ class BucketBrowserApp:
             style=Style.from_dict({
                 "panel.title": "fg:#6c6c6c",
                 "panel.title.focused": "reverse bold",
+                "panel.columns": "fg:#6c6c6c",
                 "row": "",
                 "row.dir": "fg:#00d7ff",
                 "row.selected": "reverse",
@@ -300,9 +316,10 @@ class BucketBrowserApp:
     def _cursor_point(panel: Panel) -> Point:
         # Курсор не должен указывать за пределы отрендеренных строк:
         # при loading/пустой панели контент короче, чем selection+1
+        # Сдвиг на +2: титул (строка 0) + заголовки колонок (строка 1)
         if panel.loading or not panel.rows:
             return Point(x=0, y=0)
-        return Point(x=0, y=min(panel.selection, len(panel.rows) - 1) + 1)
+        return Point(x=0, y=min(panel.selection, len(panel.rows) - 1) + 2)
 
     def _render_status(self):
         if self.confirm:

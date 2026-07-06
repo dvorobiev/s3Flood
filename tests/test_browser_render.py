@@ -70,6 +70,48 @@ class TestRowsFromVersions:
         assert len(rows[1].name) < len("v3full-long-id") + 30
 
 
+class TestColumns:
+    def make_panel(self, mode="list"):
+        return Panel(
+            title="bucket:/data/",
+            rows=[Row(name="..", is_dir=True),
+                  Row(name="file.bin", size=1024, meta="2026-07-01 10:00")],
+            selection=1,
+            mode=mode,
+        )
+
+    def test_header_row_for_list_mode(self):
+        lines = render_panel_lines(self.make_panel(), width=60, focused=True)
+        style, text = lines[1]
+        assert "Имя" in text and "Размер" in text and "Дата" in text
+        assert "panel.columns" in style
+
+    def test_header_row_for_versions_mode(self):
+        lines = render_panel_lines(self.make_panel(mode="versions"), width=60, focused=True)
+        assert "Версия" in lines[1][1]
+
+    def test_header_row_for_buckets_mode(self):
+        lines = render_panel_lines(self.make_panel(mode="buckets"), width=60, focused=True)
+        assert "Бакет" in lines[1][1]
+
+    def test_rows_have_column_separators(self):
+        lines = render_panel_lines(self.make_panel(), width=60, focused=True)
+        file_line = [t for _s, t in lines if "file.bin" in t][0]
+        assert file_line.count("│") == 2
+
+    def test_no_header_when_loading(self):
+        panel = Panel(title="t", rows=[], selection=0, loading=True)
+        lines = render_panel_lines(panel, width=40, focused=True)
+        assert not any("Имя" in t for _s, t in lines)
+
+    def test_header_and_row_columns_aligned(self):
+        lines = render_panel_lines(self.make_panel(), width=60, focused=True)
+        header = lines[1][1]
+        file_line = [t for _s, t in lines if "file.bin" in t][0]
+        assert [i for i, ch in enumerate(header) if ch == "│"] == \
+               [i for i, ch in enumerate(file_line) if ch == "│"]
+
+
 class TestRenderPanelLines:
     def make_panel(self, focused_rows=None):
         rows = focused_rows or [
