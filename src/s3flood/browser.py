@@ -95,6 +95,45 @@ class Panel:
             r.marked = False
 
 
+@dataclass
+class ProgressState:
+    """Состояние модального окна прогресса пакетной операции."""
+    title: str
+    current: str = ""
+    done: int = 0
+    total: int = 0
+    bytes_done: int = 0
+    bytes_total: int = 0
+    errors: int = 0
+    cancelled: bool = False
+
+
+def make_bar(frac: float, width: int) -> str:
+    frac = max(0.0, min(1.0, frac))
+    filled = int(round(frac * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def render_progress_lines(p: ProgressState, width: int) -> list[tuple[str, str]]:
+    """Чистый рендер содержимого окна прогресса (без рамки)."""
+    def cut(text: str) -> str:
+        return text[:width] if len(text) > width else text
+
+    bar_w = max(width - 26, 5)
+    lines: list[tuple[str, str]] = [("class:progress.file", cut(f" {p.current}") + "\n")]
+    frac_files = p.done / p.total if p.total else 0.0
+    lines.append(("class:progress.bar",
+                  cut(f" Файлы  {make_bar(frac_files, bar_w)}  {p.done}/{p.total}") + "\n"))
+    if p.bytes_total > 0:
+        frac_bytes = p.bytes_done / p.bytes_total
+        lines.append(("class:progress.bar",
+                      cut(f" Объём  {make_bar(frac_bytes, bar_w)}  "
+                          f"{format_bytes(p.bytes_done)} / {format_bytes(p.bytes_total)}") + "\n"))
+    lines.append(("class:progress.hint",
+                  cut(f" Ошибок: {p.errors} · Esc — отмена") + "\n"))
+    return lines
+
+
 def build_local_rows(path: Path) -> list[Row]:
     """Строки локальной панели: .. , каталоги, файлы (по алфавиту)."""
     rows: list[Row] = []
