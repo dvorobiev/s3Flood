@@ -19,6 +19,7 @@ from prompt_toolkit import prompt as pt_prompt
 from prompt_toolkit.completion import PathCompleter
 from prompt_toolkit.formatted_text import HTML
 
+from .app_settings import APP_SETTINGS_FILE, save_app_settings
 from .config import discover_configs, load_run_config, resolve_run_settings
 from .config_editor import build_default_config, edit_config_interactively
 from .dataset import plan_and_generate
@@ -520,6 +521,9 @@ def create_dataset_menu():
                 safety_ratio=safety_ratio
             )
         console.print("[bold green]✅ Датасет успешно создан![/bold green]")
+        dataset_path = str(Path(path).expanduser().resolve())
+        save_app_settings({"dataset_dir": dataset_path})
+        console.print(f"[dim]Путь к датасету записан в {APP_SETTINGS_FILE} — dataset_dir[/dim]")
     except Exception as e:
         console.print(f"[bold red]Ошибка при создании датасета: {e}[/bold red]")
     

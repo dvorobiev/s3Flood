@@ -17,7 +17,8 @@ run:
   # secret_key: "YOUR_SECRET_KEY"
   aws_profile: default
   threads: 8
-  data_dir: "./loadset/data"
+  # Путь к датасету задаётся на уровне приложения (файл .s3flood.yml, ключ dataset_dir).
+  # Он записывается автоматически при создании датасета; разово переопределить можно флагом --data-dir.
   report: "out.json"
   metrics: "out.csv"
   # infinite: false  # Бесконечный режим: после завершения всех файлов начинать заново

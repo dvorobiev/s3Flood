@@ -157,6 +157,11 @@ def main():
             safety_ratio=args.safety_ratio,
             fill=args.fill,
         )
+        from pathlib import Path as _Path
+
+        from .app_settings import APP_SETTINGS_FILE, save_app_settings
+        save_app_settings({"dataset_dir": str(_Path(args.path).expanduser().resolve())})
+        print(f"Путь к датасету записан в {APP_SETTINGS_FILE} (dataset_dir)")
     elif args.cmd == "run":
         config_model = None
         if args.config:
