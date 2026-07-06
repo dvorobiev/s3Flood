@@ -20,9 +20,18 @@ from prompt_toolkit.application import Application
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
+from prompt_toolkit.layout import (
+    ConditionalContainer,
+    Float,
+    FloatContainer,
+    HSplit,
+    Layout,
+    VSplit,
+    Window,
+)
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
+from prompt_toolkit.widgets import Frame
 
 from .executor import format_bytes
 from .s3browser_io import (
@@ -258,6 +267,7 @@ class BucketBrowserApp:
         self.status_err = ""
         # (текст подтверждения, корутина-действие) для инлайн y/n
         self.confirm: Optional[tuple[str, object]] = None
+        self.progress: Optional[ProgressState] = None
 
         left_control = FormattedTextControl(
             lambda: self._fragments(self.left, focused=not self.focus_right),
@@ -278,29 +288,43 @@ class BucketBrowserApp:
         status = Window(height=1, content=FormattedTextControl(self._render_status))
         keybar = Window(height=1, content=FormattedTextControl(self._render_keybar),
                         style="class:keybar")
-        root = HSplit([body, status, keybar])
+
+        progress_body = Window(
+            content=FormattedTextControl(self._render_progress),
+            always_hide_cursor=True, width=54, height=4,
+        )
+        progress_float = Float(content=ConditionalContainer(
+            Frame(progress_body, title=lambda: f" {self.progress.title} " if self.progress else ""),
+            filter=Condition(lambda: self.progress is not None),
+        ))
+        root = FloatContainer(
+            content=HSplit([body, status, keybar]),
+            floats=[progress_float],
+        )
 
         kb = KeyBindings()
-        no_confirm = Condition(lambda: self.confirm is None)
+        active = Condition(lambda: self.confirm is None and self.progress is None)
         in_confirm = Condition(lambda: self.confirm is not None)
-        kb.add("tab", filter=no_confirm)(self._key_tab)
-        kb.add("up", filter=no_confirm)(self._key_up)
-        kb.add("down", filter=no_confirm)(self._key_down)
-        kb.add("pageup", filter=no_confirm)(self._key_pgup)
-        kb.add("pagedown", filter=no_confirm)(self._key_pgdn)
-        kb.add("enter", filter=no_confirm)(self._key_enter)
-        kb.add("backspace", filter=no_confirm)(self._key_back)
-        kb.add("space", filter=no_confirm)(self._key_mark)
-        kb.add("f5", filter=no_confirm)(self._key_copy)
-        kb.add("f6", filter=no_confirm)(self._key_move_or_restore)
-        kb.add("f8", filter=no_confirm)(self._key_delete)
-        kb.add("r", filter=no_confirm)(self._key_refresh)
-        kb.add("q", filter=no_confirm)(self._key_quit)
+        in_progress = Condition(lambda: self.progress is not None)
+        kb.add("tab", filter=active)(self._key_tab)
+        kb.add("up", filter=active)(self._key_up)
+        kb.add("down", filter=active)(self._key_down)
+        kb.add("pageup", filter=active)(self._key_pgup)
+        kb.add("pagedown", filter=active)(self._key_pgdn)
+        kb.add("enter", filter=active)(self._key_enter)
+        kb.add("backspace", filter=active)(self._key_back)
+        kb.add("space", filter=active)(self._key_mark)
+        kb.add("f5", filter=active)(self._key_copy)
+        kb.add("f6", filter=active)(self._key_move_or_restore)
+        kb.add("f8", filter=active)(self._key_delete)
+        kb.add("r", filter=active)(self._key_refresh)
+        kb.add("q", filter=active)(self._key_quit)
         kb.add("f10")(self._key_quit)
         kb.add("c-c")(self._key_quit)
         kb.add("y", filter=in_confirm)(self._key_confirm_yes)
         kb.add("n", filter=in_confirm)(self._key_confirm_no)
         kb.add("escape", filter=in_confirm)(self._key_confirm_no)
+        kb.add("escape", filter=in_progress)(self._key_cancel_op)
 
         self.app = Application(
             layout=Layout(root, focused_element=self.right_window),
@@ -326,6 +350,10 @@ class BucketBrowserApp:
                 "keybar": "reverse",
                 "loading": "fg:ansiyellow",
                 "dim": "fg:#6c6c6c",
+                "progress.file": "bold",
+                "progress.bar": "",
+                "progress.hint": "fg:#6c6c6c",
+                "frame.border": "fg:#00d7ff",
             }),
         )
 
@@ -366,6 +394,11 @@ class BucketBrowserApp:
         if self.status_err:
             return [("class:status.error", f" ✗ {self.status_err} ")]
         return [("class:status", f" {self.endpoint} · {self.status_msg} ")]
+
+    def _render_progress(self):
+        if self.progress is None:
+            return []
+        return render_progress_lines(self.progress, width=52)
 
     def _render_keybar(self):
         if self.right.mode == "buckets" and self.focus_right:
@@ -514,7 +547,8 @@ class BucketBrowserApp:
                 v = row.payload
                 base = Path(self.versions_key or "object").name
                 target = self.local_path / f"{base}.{v.version_id[:8]}"
-                self._spawn(self._op_download_version(self.versions_key, target, v.version_id))
+                self._spawn(self._op_download_version(
+                    self.versions_key, target, v.version_id, size=v.size))
             return
         panel = self._active()
         targets = self._targets(panel)
@@ -585,6 +619,10 @@ class BucketBrowserApp:
             coro.close()
         self.confirm = None
         self.status_msg = "Отменено"
+
+    def _key_cancel_op(self, event) -> None:
+        if self.progress is not None:
+            self.progress.cancelled = True
 
     # ---------- async-действия ----------
 
@@ -696,52 +734,71 @@ class BucketBrowserApp:
         self._invalidate()
 
     async def _op_transfer_batch(self, targets: list[Row], *, move: bool, from_local: bool) -> None:
-        """Пакетное копирование/перемещение с прогрессом n/m."""
+        """Пакетное копирование/перемещение с модальным окном прогресса."""
         total = len(targets)
         verb = "Перемещение" if move else "Копирование"
-        errors = 0
-        for i, row in enumerate(targets, start=1):
-            arrow = "↑" if from_local else "↓"
-            self.status_msg = f"{verb} {arrow} {i}/{total}: {row.name}…"
-            self._invalidate()
-            if from_local:
-                local: Path = row.payload
-                key = self.prefix + row.name
-                res = await run_aws(
-                    build_upload_cmd(str(local), self.bucket, key, self.endpoint), self.env
-                )
-                if res.ok and move:
-                    try:
-                        os.remove(local)
-                    except OSError as exc:
-                        self.status_err = f"Не удалось удалить {local.name}: {exc}"
-                        errors += 1
-            else:
-                entry: S3Entry = row.payload
-                target = self.local_path / Path(entry.key).name
-                res = await run_aws(
-                    build_get_object_cmd(self.bucket, entry.key, str(target), self.endpoint),
-                    self.env,
-                )
-                if res.ok and move:
+        arrow = "↑" if from_local else "↓"
+        prog = ProgressState(title=f"{verb} {arrow}", total=total,
+                             bytes_total=sum(r.size for r in targets))
+        self.progress = prog
+        try:
+            for row in targets:
+                if prog.cancelled:
+                    break
+                prog.current = row.name
+                self._invalidate()
+                if from_local:
+                    local: Path = row.payload
+                    key = self.prefix + row.name
                     res = await run_aws(
-                        build_delete_cmd(self.bucket, entry.key, self.endpoint), self.env
+                        build_upload_cmd(str(local), self.bucket, key, self.endpoint), self.env
                     )
-            if not res.ok:
-                errors += 1
-                self.status_err = res.error
+                    if res.ok and move:
+                        try:
+                            os.remove(local)
+                        except OSError as exc:
+                            self.status_err = f"Не удалось удалить {local.name}: {exc}"
+                            prog.errors += 1
+                else:
+                    entry: S3Entry = row.payload
+                    target = self.local_path / Path(entry.key).name
+                    res = await run_aws(
+                        build_get_object_cmd(self.bucket, entry.key, str(target), self.endpoint),
+                        self.env,
+                    )
+                    if res.ok and move:
+                        res = await run_aws(
+                            build_delete_cmd(self.bucket, entry.key, self.endpoint), self.env
+                        )
+                if not res.ok:
+                    prog.errors += 1
+                    self.status_err = res.error
+                prog.done += 1
+                prog.bytes_done += row.size
+        finally:
+            self.progress = None
         (self.left if from_local else self.right).clear_marks()
         self.reload_local()
         await self._load_bucket()
-        done = total - errors
-        self.status_msg = f"{verb}: готово {done}/{total}" + (f", ошибок {errors}" if errors else "")
+        if prog.cancelled:
+            self.status_msg = f"{verb}: Отменено, сделано {prog.done}/{total}"
+        else:
+            done = total - prog.errors
+            self.status_msg = f"{verb}: готово {done}/{total}" + (
+                f", ошибок {prog.errors}" if prog.errors else "")
         self._invalidate()
 
-    async def _op_download_version(self, key: str, target: Path, version_id: str) -> None:
-        self.status_msg = f"↓ версия {version_id[:8]} → {target.name}…"
-        self._invalidate()
-        cmd = build_get_object_cmd(self.bucket, key, str(target), self.endpoint, version_id)
-        res = await run_aws(cmd, self.env)
+    async def _op_download_version(
+        self, key: str, target: Path, version_id: str, size: int = 0
+    ) -> None:
+        prog = ProgressState(title="Скачивание версии", current=target.name,
+                             total=1, bytes_total=size)
+        self.progress = prog
+        try:
+            cmd = build_get_object_cmd(self.bucket, key, str(target), self.endpoint, version_id)
+            res = await run_aws(cmd, self.env)
+        finally:
+            self.progress = None
         if res.ok:
             self.status_msg = f"↓ сохранено: {target.name}"
             self.reload_local()
@@ -751,23 +808,43 @@ class BucketBrowserApp:
 
     async def _op_delete_batch(self, keys: list[tuple[str, str | None]]) -> None:
         total = len(keys)
-        errors = 0
-        for i, (key, version_id) in enumerate(keys, start=1):
-            self.status_msg = f"Удаление {i}/{total}: {Path(key).name}…"
-            self._invalidate()
-            res = await run_aws(build_delete_cmd(self.bucket, key, self.endpoint, version_id), self.env)
-            if not res.ok:
-                errors += 1
-                self.status_err = res.error
+        prog = ProgressState(title="Удаление", total=total)
+        self.progress = prog
+        try:
+            for key, version_id in keys:
+                if prog.cancelled:
+                    break
+                prog.current = Path(key).name
+                self._invalidate()
+                res = await run_aws(
+                    build_delete_cmd(self.bucket, key, self.endpoint, version_id), self.env
+                )
+                if not res.ok:
+                    prog.errors += 1
+                    self.status_err = res.error
+                prog.done += 1
+        finally:
+            self.progress = None
         if self.right.mode == "versions" and self.versions_key:
             await self._load_versions(self.versions_key)
         else:
             await self._load_bucket()
-        self.status_msg = f"Удалено {total - errors}/{total}" + (f", ошибок {errors}" if errors else "")
+        if prog.cancelled:
+            self.status_msg = f"Удаление: Отменено, сделано {prog.done}/{total}"
+        else:
+            self.status_msg = f"Удалено {total - prog.errors}/{total}" + (
+                f", ошибок {prog.errors}" if prog.errors else "")
         self._invalidate()
 
     async def _op_restore(self, key: str, version_id: str) -> None:
-        res = await run_aws(build_restore_cmd(self.bucket, key, version_id, self.endpoint), self.env)
+        prog = ProgressState(title="Откат к версии", current=version_id[:8], total=1)
+        self.progress = prog
+        try:
+            res = await run_aws(
+                build_restore_cmd(self.bucket, key, version_id, self.endpoint), self.env
+            )
+        finally:
+            self.progress = None
         if res.ok:
             self.status_msg = f"Откачено к версии {version_id[:8]} (создана новая latest-копия)"
             await self._load_versions(key)
