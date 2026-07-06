@@ -2,6 +2,7 @@ from argparse import Namespace
 
 import pytest
 
+from s3flood.app_settings import save_app_settings
 from s3flood.config import RunConfigModel, resolve_run_settings
 
 
@@ -9,6 +10,10 @@ def make_config(**over):
     base = {"endpoint": "http://cfg:9000", "bucket": "cfg-bucket"}
     base.update(over)
     return RunConfigModel(**base)
+
+
+def _min_args(**kw):
+    return Namespace(profile="write", endpoint="http://h:9000", bucket="b", **kw)
 
 
 class TestResolveRunSettings:
@@ -48,3 +53,29 @@ class TestResolveRunSettings:
         )
         assert s.endpoint == "http://n1:9000"
         assert s.endpoints == ["http://n1:9000", "http://n2:9000"]
+
+
+class TestDataDirPriority:
+    def test_default_when_no_sources(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        settings = resolve_run_settings(_min_args(), None)
+        assert settings.data_dir == "./data"
+
+    def test_app_settings_used(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        save_app_settings({"dataset_dir": "/srv/dataset"}, tmp_path)
+        settings = resolve_run_settings(_min_args(), None)
+        assert settings.data_dir == "/srv/dataset"
+
+    def test_cli_overrides_app_settings(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        save_app_settings({"dataset_dir": "/srv/dataset"}, tmp_path)
+        settings = resolve_run_settings(_min_args(data_dir="/cli/data"), None)
+        assert settings.data_dir == "/cli/data"
+
+    def test_config_data_dir_ignored_with_warning(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        config = RunConfigModel(data_dir="/from/config")
+        settings = resolve_run_settings(_min_args(), config)
+        assert settings.data_dir == "./data"
+        assert "data_dir" in capsys.readouterr().err

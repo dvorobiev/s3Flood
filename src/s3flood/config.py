@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from argparse import Namespace
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -8,6 +9,7 @@ from typing import List, Optional, Union
 import yaml
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
+from .app_settings import APP_SETTINGS_FILE, get_dataset_dir
 from .dataset import parse_size
 
 
@@ -158,7 +160,18 @@ def resolve_run_settings(cli_args: Namespace, config: Optional[RunConfigModel]) 
         raise SystemExit("run: missing bucket (use --bucket or set in config file)")
 
     threads = pick("threads", default=8)
-    data_dir = pick("data_dir", default="./data")
+
+    # data_dir: датасет задаётся приложением (.s3flood.yml), не конфигом прогона
+    cli_data_dir = getattr(cli_args, "data_dir", None)
+    config_data_dir = config.data_dir if config is not None else None
+    if config_data_dir:
+        print(
+            f"предупреждение: data_dir в конфиге игнорируется — датасет задаётся "
+            f"приложением ({APP_SETTINGS_FILE} или --data-dir)",
+            file=sys.stderr,
+        )
+    data_dir = cli_data_dir or get_dataset_dir() or "./data"
+
     report = pick("report", default="report.json")
     metrics = pick("metrics", default="metrics.csv")
 
