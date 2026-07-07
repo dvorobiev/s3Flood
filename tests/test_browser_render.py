@@ -2,6 +2,7 @@ from s3flood.browser import (
     Panel,
     Row,
     build_local_rows,
+    panel_summary,
     render_panel_lines,
     rows_from_entries,
     rows_from_versions,
@@ -70,6 +71,38 @@ class TestRowsFromVersions:
         assert len(rows[1].name) < len("v3full-long-id") + 30
 
 
+class TestPanelSummary:
+    def test_counts_files_only(self):
+        panel = Panel(title="t", rows=[
+            Row(name="..", is_dir=True),
+            Row(name="dir/", is_dir=True),
+            Row(name="a.bin", size=1024),
+            Row(name="b.bin", size=2048),
+        ])
+        s = panel_summary(panel)
+        assert "2" in s and "3.0 KB" in s
+
+    def test_marked_selection_wins(self):
+        panel = Panel(title="t", rows=[
+            Row(name="a.bin", size=1024, marked=True),
+            Row(name="b.bin", size=2048),
+        ])
+        s = panel_summary(panel)
+        assert "выделено 1" in s and "1.0 KB" in s
+
+    def test_loading_empty(self):
+        assert panel_summary(Panel(title="t", loading=True)) == ""
+
+
+class TestNoTitleLine:
+    def test_first_line_is_column_header(self):
+        panel = Panel(title="bucket:/data/",
+                      rows=[Row(name="f.bin", size=1)], selection=0)
+        lines = render_panel_lines(panel, width=60, focused=True)
+        assert "Имя" in lines[0][1]
+        assert not any("bucket:/data/" in t for _s, t in lines)
+
+
 class TestColumns:
     def make_panel(self, mode="list"):
         return Panel(
@@ -82,17 +115,17 @@ class TestColumns:
 
     def test_header_row_for_list_mode(self):
         lines = render_panel_lines(self.make_panel(), width=60, focused=True)
-        style, text = lines[1]
+        style, text = lines[0]
         assert "Имя" in text and "Размер" in text and "Дата" in text
         assert "panel.columns" in style
 
     def test_header_row_for_versions_mode(self):
         lines = render_panel_lines(self.make_panel(mode="versions"), width=60, focused=True)
-        assert "Версия" in lines[1][1]
+        assert "Версия" in lines[0][1]
 
     def test_header_row_for_buckets_mode(self):
         lines = render_panel_lines(self.make_panel(mode="buckets"), width=60, focused=True)
-        assert "Бакет" in lines[1][1]
+        assert "Бакет" in lines[0][1]
 
     def test_rows_have_column_separators(self):
         lines = render_panel_lines(self.make_panel(), width=60, focused=True)
@@ -106,7 +139,7 @@ class TestColumns:
 
     def test_header_and_row_columns_aligned(self):
         lines = render_panel_lines(self.make_panel(), width=60, focused=True)
-        header = lines[1][1]
+        header = lines[0][1]
         file_line = [t for _s, t in lines if "file.bin" in t][0]
         assert [i for i, ch in enumerate(header) if ch == "│"] == \
                [i for i, ch in enumerate(file_line) if ch == "│"]
@@ -123,7 +156,7 @@ class TestRenderPanelLines:
     def test_header_and_rows(self):
         lines = render_panel_lines(self.make_panel(), width=40, focused=True)
         header_text = lines[0][1]
-        assert "bucket:/data/" in header_text
+        assert "Имя" in header_text
         assert any("file.bin" in text for _style, text in lines)
 
     def test_selected_row_marked_when_focused(self):

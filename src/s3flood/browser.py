@@ -68,6 +68,17 @@ def format_columns(name: str, size: str, meta: str, width: int) -> str:
     return f"{name:<{name_w}.{name_w}} │{size:>9} │ {meta}"
 
 
+def panel_summary(panel: Panel) -> str:
+    """Сводная строка панели: всего объектов/размер или выделенное."""
+    if panel.loading:
+        return ""
+    files = [r for r in panel.rows if not r.is_dir and r.name != ".."]
+    marked = [r for r in files if r.marked]
+    if marked:
+        return f" выделено {len(marked)} · {format_bytes(sum(r.size for r in marked))}"
+    return f" {len(files)} объектов · {format_bytes(sum(r.size for r in files))}"
+
+
 @dataclass
 class Row:
     name: str
@@ -213,12 +224,11 @@ def rows_from_versions(versions: list[S3Version]) -> list[Row]:
 
 
 def render_panel_lines(panel: Panel, width: int, focused: bool) -> list[tuple[str, str]]:
-    """Чистый рендер панели в список (style, text)-строк."""
+    """Чистый рендер панели в список (style, text)-строк. Титул рисует Frame (Task 4)."""
     def cut(text: str) -> str:
         return text[:width] if len(text) > width else text
 
-    header_style = "class:panel.title.focused" if focused else "class:panel.title"
-    lines: list[tuple[str, str]] = [(header_style, cut(f" {panel.title} ".ljust(width)) + "\n")]
+    lines: list[tuple[str, str]] = []
 
     if panel.loading:
         frame = SPINNER[int(time.time() * 8) % len(SPINNER)]
@@ -383,10 +393,10 @@ class BucketBrowserApp:
     def _cursor_point(panel: Panel) -> Point:
         # Курсор не должен указывать за пределы отрендеренных строк:
         # при loading/пустой панели контент короче, чем selection+1
-        # Сдвиг на +2: титул (строка 0) + заголовки колонок (строка 1)
+        # Сдвиг на +1: заголовки колонок (строка 0), титул рисует Frame (Task 4)
         if panel.loading or not panel.rows:
             return Point(x=0, y=0)
-        return Point(x=0, y=min(panel.selection, len(panel.rows) - 1) + 2)
+        return Point(x=0, y=min(panel.selection, len(panel.rows) - 1) + 1)
 
     def _render_status(self):
         if self.confirm:
