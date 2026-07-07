@@ -1121,6 +1121,23 @@ def print_summary(summary: dict, csv_path: str, json_path: str) -> None:
     console.print()
     console.rule(title)
 
+    from rich.panel import Panel as RichPanel
+
+    from .dashboard import sparkline
+    from .metrics import summary_speed_stats
+
+    stats = summary_speed_stats(summary)
+    speed_lines = [
+        f"[bold cyan]{stats['total_MBps']:.1f} MB/s[/bold cyan] сквозная скорость",
+        f"↑ запись {stats['write_MBps']:.1f} MB/s   ↓ чтение {stats['read_MBps']:.1f} MB/s   "
+        f"{stats['ops_per_sec']:.1f} оп/с   пик {stats['peak_MBps']:.1f} MB/s",
+    ]
+    spark = sparkline(stats["speeds"], width=48)
+    if spark:
+        speed_lines.append(f"[cyan]{spark}[/cyan] MB/s по времени")
+    console.print(RichPanel("\n".join(speed_lines), title="Скорость",
+                            title_align="left", border_style="cyan"))
+
     tp = Table(box=box.SIMPLE_HEAVY, title="Пропускная способность", title_justify="left")
     tp.add_column("")
     tp.add_column("операций OK", justify="right")
@@ -1136,20 +1153,26 @@ def print_summary(summary: dict, csv_path: str, json_path: str) -> None:
         format_bytes(summary.get("read_bytes", 0)),
         f"{summary.get('read_MBps_avg', 0.0):.1f} MB/s",
     )
+    tp.add_row(
+        "[bold]Итого[/bold]",
+        str(summary.get("write_ok_ops", 0) + summary.get("read_ok_ops", 0)),
+        format_bytes(summary.get("write_bytes", 0) + summary.get("read_bytes", 0)),
+        f"[bold]{stats['total_MBps']:.1f} MB/s[/bold]",
+    )
     console.print(tp)
 
     latency = summary.get("latency") or {}
     if latency:
         lt = Table(box=box.SIMPLE_HEAVY, title="Латентность, мс", title_justify="left")
         lt.add_column("")
-        for col in ("p50", "p90", "p95", "p99", "avg", "max"):
+        for col in ("p50", "p95", "p99", "avg"):
             lt.add_column(col, justify="right")
         for name, key in (("Запись", "write"), ("Чтение", "read")):
             data = latency.get(key)
             if data:
                 lt.add_row(
                     name,
-                    *(f"{data[k]:.0f}" for k in ("p50_ms", "p90_ms", "p95_ms", "p99_ms", "avg_ms", "max_ms")),
+                    *(f"{data[k]:.0f}" for k in ("p50_ms", "p95_ms", "p99_ms", "avg_ms")),
                 )
         console.print(lt)
         if summary.get("client_overhead_ms"):

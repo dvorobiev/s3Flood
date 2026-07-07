@@ -1,7 +1,31 @@
 import time
 
-from s3flood.executor import Metrics
+from s3flood.executor import Metrics, print_summary
 from s3flood.metrics import build_timeline, classify_error
+
+
+def make_summary():
+    return {
+        "meta": {"profile": "mixed", "version": "0.13.0"},
+        "duration_sec": 10.0,
+        "wall_clock_sec": 11.0,
+        "write_bytes": 100 * 1024 * 1024,
+        "read_bytes": 50 * 1024 * 1024,
+        "write_ok_ops": 40,
+        "read_ok_ops": 10,
+        "err_ops": 0,
+        "write_MBps_avg": 10.0,
+        "read_MBps_avg": 5.0,
+        "timeline": [
+            {"t_sec": 0, "write_bytes": 60 * 1024 * 1024, "read_bytes": 0},
+            {"t_sec": 1, "write_bytes": 40 * 1024 * 1024,
+             "read_bytes": 50 * 1024 * 1024},
+        ],
+        "latency": {
+            "write": {"p50_ms": 100, "p90_ms": 150, "p95_ms": 180,
+                      "p99_ms": 250, "avg_ms": 120, "max_ms": 400},
+        },
+    }
 
 
 class TestClassifyError:
@@ -68,3 +92,29 @@ class TestReportV2:
         assert out["errors"] == {"ServiceUnavailable": 1}
         assert len(out["timeline"]) >= 1
         assert out["timeline"][0]["write_ops"] == 1
+
+
+class TestPrintSummarySpeedFocus:
+    def test_speed_block_first_and_has_throughput(self, capsys):
+        print_summary(make_summary(), "m.csv", "r.json")
+        out = capsys.readouterr().out
+        assert "Скорость" in out
+        assert "15.0 MB/s" in out          # сквозная (150 MB / 10 s)
+        assert out.index("Скорость") < out.index("Латентность")
+
+    def test_totals_row_present(self, capsys):
+        print_summary(make_summary(), "m.csv", "r.json")
+        out = capsys.readouterr().out
+        assert "Итого" in out
+
+    def test_latency_compact_no_max_column(self, capsys):
+        print_summary(make_summary(), "m.csv", "r.json")
+        out = capsys.readouterr().out
+        assert "p95" in out and "p99" in out
+        assert "max" not in out
+
+    def test_works_without_timeline_and_latency(self, capsys):
+        s = make_summary()
+        del s["timeline"], s["latency"]
+        print_summary(s, "m.csv", "r.json")
+        assert "Скорость" in capsys.readouterr().out
