@@ -224,3 +224,54 @@ class TestMetricsCsvWriter:
         writer = MetricsCsvWriter(str(tmp_path / "m.csv"))
         writer.close()
         writer.close()
+
+
+from s3flood.metrics import summary_speed_stats, timeline_speeds
+
+
+class TestTimelineSpeeds:
+    def test_empty(self):
+        assert timeline_speeds([]) == []
+
+    def test_single_bucket_step_1(self):
+        tl = [{"t_sec": 0, "write_bytes": 2 * 1024 * 1024, "read_bytes": 0}]
+        assert timeline_speeds(tl) == [2.0]
+
+    def test_coarse_step_divides_by_width(self):
+        # бакеты по 10 секунд: 20 MB за бакет = 2 MB/s
+        tl = [
+            {"t_sec": 0, "write_bytes": 20 * 1024 * 1024, "read_bytes": 0},
+            {"t_sec": 10, "write_bytes": 0, "read_bytes": 20 * 1024 * 1024},
+        ]
+        assert timeline_speeds(tl) == [2.0, 2.0]
+
+
+class TestSummarySpeedStats:
+    def test_normal_summary(self):
+        summary = {
+            "duration_sec": 10.0,
+            "write_bytes": 50 * 1024 * 1024,
+            "read_bytes": 50 * 1024 * 1024,
+            "write_ok_ops": 30,
+            "read_ok_ops": 20,
+            "write_MBps_avg": 5.0,
+            "read_MBps_avg": 5.0,
+            "timeline": [
+                {"t_sec": 0, "write_bytes": 30 * 1024 * 1024, "read_bytes": 0},
+                {"t_sec": 1, "write_bytes": 20 * 1024 * 1024,
+                 "read_bytes": 50 * 1024 * 1024},
+            ],
+        }
+        stats = summary_speed_stats(summary)
+        assert stats["total_MBps"] == 10.0
+        assert stats["ops_per_sec"] == 5.0
+        assert stats["write_MBps"] == 5.0
+        assert stats["peak_MBps"] == 70.0
+        assert len(stats["speeds"]) == 2
+
+    def test_zero_duration_and_missing_timeline(self):
+        stats = summary_speed_stats({"duration_sec": 0.0})
+        assert stats["total_MBps"] == 0.0
+        assert stats["ops_per_sec"] == 0.0
+        assert stats["peak_MBps"] == 0.0
+        assert stats["speeds"] == []

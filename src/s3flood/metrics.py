@@ -120,6 +120,39 @@ def build_timeline(ops, max_points: int = 300) -> list[dict]:
     return [buckets[k] for k in sorted(buckets)]
 
 
+def timeline_speeds(timeline: list[dict]) -> list[float]:
+    """MB/s на бакет timeline; при укрупнённых бакетах делит на ширину шага."""
+    if not timeline:
+        return []
+    keys = sorted(t.get("t_sec", 0) for t in timeline)
+    step = 1
+    if len(keys) > 1:
+        diffs = [b - a for a, b in zip(keys, keys[1:], strict=False) if b > a]
+        if diffs:
+            step = min(diffs)
+    return [
+        (t.get("write_bytes", 0) + t.get("read_bytes", 0)) / 1024 / 1024 / step
+        for t in timeline
+    ]
+
+
+def summary_speed_stats(summary: dict) -> dict:
+    """Скоростные показатели прогона для консольного отчёта."""
+    duration = float(summary.get("duration_sec") or 0.0)
+    write_b = summary.get("write_bytes", 0)
+    read_b = summary.get("read_bytes", 0)
+    ops = summary.get("write_ok_ops", 0) + summary.get("read_ok_ops", 0)
+    speeds = timeline_speeds(summary.get("timeline") or [])
+    return {
+        "total_MBps": (write_b + read_b) / 1024 / 1024 / duration if duration > 0 else 0.0,
+        "write_MBps": float(summary.get("write_MBps_avg") or 0.0),
+        "read_MBps": float(summary.get("read_MBps_avg") or 0.0),
+        "ops_per_sec": ops / duration if duration > 0 else 0.0,
+        "peak_MBps": max(speeds) if speeds else 0.0,
+        "speeds": speeds,
+    }
+
+
 def read_ops_csv(path: str) -> list[dict]:
     """Читает metrics.csv (новый и старый формат) в список операций."""
     ops: list[dict] = []
