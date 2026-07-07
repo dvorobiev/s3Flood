@@ -290,11 +290,32 @@ class BucketBrowserApp:
         self.left_window = Window(content=left_control, always_hide_cursor=True, wrap_lines=False)
         self.right_window = Window(content=right_control, always_hide_cursor=True, wrap_lines=False)
 
-        body = VSplit([
-            self.left_window,
-            Window(width=1, char="│", style="class:separator"),
-            self.right_window,
-        ])
+        def _summary_control(panel: Panel) -> FormattedTextControl:
+            return FormattedTextControl(
+                lambda: [("class:panel.summary", panel_summary(panel))]
+            )
+
+        left_frame = HSplit(
+            [Frame(
+                HSplit([
+                    self.left_window,
+                    Window(height=1, content=_summary_control(self.left)),
+                ]),
+                title=lambda: f" {self.left.title} ",
+            )],
+            style=lambda: "class:panelfocus" if not self.focus_right else "",
+        )
+        right_frame = HSplit(
+            [Frame(
+                HSplit([
+                    self.right_window,
+                    Window(height=1, content=_summary_control(self.right)),
+                ]),
+                title=lambda: f" {self.right.title} ",
+            )],
+            style=lambda: "class:panelfocus" if self.focus_right else "",
+        )
+        body = VSplit([left_frame, right_frame])
         status = Window(height=1, content=FormattedTextControl(self._render_status))
         keybar = Window(height=1, content=FormattedTextControl(self._render_keybar),
                         style="class:keybar")
@@ -345,8 +366,6 @@ class BucketBrowserApp:
             input=input,
             output=output,
             style=Style.from_dict({
-                "panel.title": "fg:#6c6c6c",
-                "panel.title.focused": "reverse bold",
                 "panel.columns": "fg:#6c6c6c",
                 "row": "",
                 "row.dir": "fg:#00d7ff",
@@ -363,7 +382,12 @@ class BucketBrowserApp:
                 "progress.file": "bold",
                 "progress.bar": "",
                 "progress.hint": "fg:#6c6c6c",
-                "frame.border": "fg:#00d7ff",
+                "frame.border": "fg:#585858",
+                "frame.label": "fg:#6c6c6c",
+                "panelfocus frame.border": "fg:#00d7ff bold",
+                "panelfocus frame.label": "fg:#00d7ff bold",
+                "panel.summary": "fg:#6c6c6c",
+                "panelfocus panel.summary": "fg:#00d7ff",
             }),
         )
 
