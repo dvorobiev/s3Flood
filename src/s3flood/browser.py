@@ -715,6 +715,7 @@ class BucketBrowserApp:
     def reload_local(self) -> None:
         self.left.rows = build_local_rows(self.local_path)
         self.left.title = str(self.local_path)
+        self.left.selection = 0
         self.left.clamp()
 
     async def _ensure_versioning_status(self) -> None:

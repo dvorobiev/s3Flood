@@ -442,3 +442,30 @@ class TestNoCursorStyleWhenUnfocused:
         lines = render_panel_lines(panel, width=40, focused=True)
         sel_style = [s for s, t in lines if "a.bin" in t][0]
         assert "selected" in sel_style
+
+
+class TestReloadLocalResetsSelection:
+    def test_navigating_into_dir_resets_selection_to_first_row(self, tmp_path):
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=DummyOutput(),
+        )
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "z.bin").write_text("x")
+        app.left.selection = 5  # был выбран 5-й элемент в предыдущем каталоге
+        app.local_path = sub
+        app.reload_local()
+        assert app.left.selection == 0
+
+    def test_navigating_up_resets_selection_to_first_row(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=sub,
+            input=DummyInput(), output=DummyOutput(),
+        )
+        app.left.selection = 3
+        app.local_path = tmp_path
+        app.reload_local()
+        assert app.left.selection == 0
