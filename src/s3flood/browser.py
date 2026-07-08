@@ -54,6 +54,23 @@ from .s3browser_io import (
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
+
+def truncate_middle(name: str, width: int) -> str:
+    """Сокращает длинную строку до width символов: начало…конец.
+
+    Хвост включает конец исходной строки — для имён файлов это естественно
+    сохраняет расширение, т.к. оно всегда в конце.
+    """
+    if len(name) <= width:
+        return name
+    if width <= 1:
+        return name[:width]
+    avail = width - 1  # 1 символ на "…"
+    tail_len = avail // 2
+    head_len = avail - tail_len
+    return name[:head_len] + "…" + (name[-tail_len:] if tail_len else "")
+
+
 # Заголовки колонок панели по режимам (имя, размер, дата/метки)
 COLUMN_HEADERS: dict[str, tuple[str, str, str]] = {
     "list": ("Имя", "Размер", "Дата"),
@@ -65,7 +82,8 @@ COLUMN_HEADERS: dict[str, tuple[str, str, str]] = {
 def format_columns(name: str, size: str, meta: str, width: int) -> str:
     """Одна строка панели: имя │ размер │ мета — с фиксированной сеткой колонок."""
     name_w = max(width - 33, 12)
-    return f"{name:<{name_w}.{name_w}} │{size:>9} │ {meta}"
+    display_name = truncate_middle(name, name_w)
+    return f"{display_name:<{name_w}} │{size:>9} │ {meta}"
 
 
 def panel_summary(panel: Panel) -> str:

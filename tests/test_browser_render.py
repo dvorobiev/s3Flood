@@ -15,8 +15,35 @@ from s3flood.browser import (
     render_panel_lines,
     rows_from_entries,
     rows_from_versions,
+    truncate_middle,
 )
 from s3flood.s3browser_io import S3Entry, S3Version
+
+
+class TestTruncateMiddle:
+    def test_short_name_untouched(self):
+        assert truncate_middle("a.bin", 20) == "a.bin"
+
+    def test_exact_width_untouched(self):
+        assert truncate_middle("12345", 5) == "12345"
+
+    def test_long_name_has_ellipsis_and_exact_width(self):
+        name = "very-long-object-name-that-does-not-fit.tar.gz"
+        result = truncate_middle(name, 20)
+        assert len(result) == 20
+        assert "…" in result
+
+    def test_tail_preserves_extension(self):
+        name = "a" * 40 + ".tar.gz"
+        result = truncate_middle(name, 20)
+        assert result.endswith(".tar.gz")
+
+    def test_width_le_1_returns_prefix(self):
+        assert truncate_middle("abcdef", 1) == "a"
+        assert truncate_middle("abcdef", 0) == ""
+
+    def test_empty_name(self):
+        assert truncate_middle("", 10) == ""
 
 
 class TestBuildLocalRows:
