@@ -260,10 +260,8 @@ class _FixedSizeOutput(DummyOutput):
 class TestPanelWidthRealRender:
     """Реальный рендер через prompt_toolkit-контейнер (не только чистая функция).
 
-    Проверяет, что после оборачивания панелей в Frame последний символ длинной
-    строки не обрезается рамкой: _panel_width() должен учитывать border
-    Frame (по 1 колонке слева и справа на панель), а не только отсутствие
-    разделителя между панелями.
+    Проверяет, что последний символ длинной строки не обрезается ни внутренней
+    рамкой панели, ни внешней рамкой приложения.
     """
 
     @pytest.mark.parametrize("cols", [78, 80, 100, 120])
@@ -290,13 +288,13 @@ class TestPanelWidthRealRender:
         )
         screen.draw_all_floats()
 
-        # Обе панели используют одну и ту же ширину контента (_panel_width),
-        # поэтому левый Frame целиком занимает panel_width + 2 (границы) колонок,
-        # правый Frame начинается сразу за ним (разделителя между ними нет).
-        left_frame_total = panel_width + 2
-        right_content_start = left_frame_total + 1
-        row_chars = screen.data_buffer[2]  # строка 0 — верх рамки/заголовок,
-        # строка 1 — заголовки колонок, строка 2 — первая строка данных
+        # col 0 — внешняя левая "║"; inner_start = 1; левая панель занимает
+        # panel_area колонок (её собственная рамка Frame внутри); правая панель
+        # начинается сразу за левой (без разделителя).
+        panel_area = (cols - 2) // 2
+        right_content_start = 1 + panel_area + 1  # +1 внешняя рамка, +1 своя рамка Frame
+        row_chars = screen.data_buffer[3]  # 0 — внешняя рамка, 1 — Frame-рамка/титул,
+        # 2 — заголовки колонок, 3 — первая строка данных
         actual_row = "".join(
             row_chars[x].char for x in range(right_content_start,
                                               right_content_start + panel_width)
@@ -306,6 +304,44 @@ class TestPanelWidthRealRender:
             f"cols={cols}: последний символ строки обрезан рамкой "
             f"(expected={expected_row!r}, actual={actual_row!r})"
         )
+
+
+class TestOuterDoubleFrame:
+    def test_top_and_bottom_borders(self, tmp_path):
+        cols = 80
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=_FixedSizeOutput(cols),
+        )
+        screen = Screen()
+        write_position = WritePosition(xpos=0, ypos=0, width=cols, height=40)
+        app.app.layout.container.write_to_screen(
+            screen, MouseHandlers(), write_position, "", False, 0
+        )
+        screen.draw_all_floats()
+
+        top = screen.data_buffer[0]
+        bottom = screen.data_buffer[39]
+        assert top[0].char == "╔" and top[cols - 1].char == "╗"
+        assert bottom[0].char == "╚" and bottom[cols - 1].char == "╝"
+        assert all(top[x].char == "═" for x in range(1, cols - 1))
+
+    def test_side_borders_present_on_body_row(self, tmp_path):
+        cols = 80
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=_FixedSizeOutput(cols),
+        )
+        screen = Screen()
+        write_position = WritePosition(xpos=0, ypos=0, width=cols, height=40)
+        app.app.layout.container.write_to_screen(
+            screen, MouseHandlers(), write_position, "", False, 0
+        )
+        screen.draw_all_floats()
+
+        body_row = screen.data_buffer[1]
+        assert body_row[0].char == "║"
+        assert body_row[cols - 1].char == "║"
 
 
 class TestPanelsDoNotCollapse:
@@ -320,11 +356,14 @@ class TestPanelsDoNotCollapse:
             screen, MouseHandlers(), write_position, "", False, 0
         )
         screen.draw_all_floats()
-        row = screen.data_buffer[0]
-        for x in range(1, cols):
+        # строка 0 — внешняя двойная рамка приложения, строка 1 — тело
+        # (VSplit с внешними "║" по бокам); col 0 — внешняя "║", col 1 —
+        # "┌" левой панели, поэтому ищем правую панель начиная с col 2.
+        row = screen.data_buffer[1]
+        for x in range(2, cols):
             if row[x].char == "┌":
                 return x
-        raise AssertionError("правая рамка не найдена в верхней строке")
+        raise AssertionError("правая рамка не найдена в верхней строке тела")
 
     def test_loading_and_loaded_give_same_boundary(self, tmp_path):
         cols = 100

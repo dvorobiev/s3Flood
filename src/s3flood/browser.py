@@ -352,10 +352,21 @@ class BucketBrowserApp:
             Frame(progress_body, title=lambda: f" {self.progress.title} " if self.progress else ""),
             filter=Condition(lambda: self.progress is not None),
         ))
-        root = FloatContainer(
+        inner = FloatContainer(
             content=HSplit([body, status, keybar]),
             floats=[progress_float],
         )
+        root = HSplit([
+            Window(height=1, content=FormattedTextControl(
+                lambda: self._outer_line("╔", "═", "╗"))),
+            VSplit([
+                Window(width=1, char="║", style="class:outer.border"),
+                inner,
+                Window(width=1, char="║", style="class:outer.border"),
+            ]),
+            Window(height=1, content=FormattedTextControl(
+                lambda: self._outer_line("╚", "═", "╝"))),
+        ])
 
         kb = KeyBindings()
         active = Condition(lambda: self.confirm is None and self.progress is None)
@@ -411,6 +422,7 @@ class BucketBrowserApp:
                 "panelfocus frame.label": "fg:#00d7ff bold",
                 "panel.summary": "fg:#6c6c6c",
                 "panelfocus panel.summary": "fg:#00d7ff",
+                "outer.border": "fg:ansiwhite",
             }),
         )
 
@@ -426,16 +438,21 @@ class BucketBrowserApp:
             return f"{self.bucket}:/{self.versions_key} ⊙ версии{suffix}"
         return f"{self.bucket}:/{self.prefix}{suffix}"
 
-    def _panel_width(self) -> int:
+    def _term_cols(self) -> int:
         try:
-            cols = self.app.output.get_size().columns
+            return self.app.output.get_size().columns
         except Exception:
-            cols = 80
-        # Каждая панель обёрнута в Frame — рамка съедает по 1 колонке слева
-        # и справа (2 колонки на панель). Разделителя между панелями больше
-        # нет, поэтому на панель приходится ровно половина cols минус её
-        # собственная рамка.
-        return max(cols // 2 - 2, 20)
+            return 80
+
+    def _outer_line(self, left: str, fill: str, right: str) -> list[tuple[str, str]]:
+        cols = self._term_cols()
+        return [("class:outer.border", left + fill * max(cols - 2, 0) + right)]
+
+    def _panel_width(self) -> int:
+        cols = self._term_cols()
+        inner_cols = cols - 2         # внешняя двойная рамка (левая/правая)
+        panel_area = inner_cols // 2  # половина на панель (VSplit 50/50)
+        return max(panel_area - 2, 20)  # минус собственная рамка панели (Frame)
 
     def _fragments(self, panel: Panel, focused: bool):
         return render_panel_lines(panel, self._panel_width(), focused)
