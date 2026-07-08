@@ -258,7 +258,8 @@ def render_panel_lines(panel: Panel, width: int, focused: bool) -> list[tuple[st
         return lines
 
     headers = COLUMN_HEADERS.get(panel.mode, COLUMN_HEADERS["list"])
-    lines.append(("class:panel.columns", cut("   " + format_columns(*headers, width)) + "\n"))
+    header_text = "   " + format_columns(*headers, width)
+    lines.append(("class:panel.columns", cut(header_text).ljust(width) + "\n"))
 
     for idx, row in enumerate(panel.rows):
         is_sel = idx == panel.selection
@@ -271,9 +272,7 @@ def render_panel_lines(panel: Panel, width: int, focused: bool) -> list[tuple[st
             style = "class:row.marked"
         if is_sel and focused:
             style = "class:row.selected"
-        elif is_sel:
-            style = "class:row.cursor"
-        lines.append((style, cut(text) + "\n"))
+        lines.append((style, cut(text).ljust(width) + "\n"))
     if not panel.rows:
         lines.append(("class:dim", cut("  (пусто)") + "\n"))
     return lines
@@ -405,7 +404,6 @@ class BucketBrowserApp:
                 "row": "",
                 "row.dir": "fg:#00d7ff",
                 "row.selected": "reverse",
-                "row.cursor": "underline",
                 "row.marked": "fg:ansiyellow bold",
                 "status": "",
                 "status.error": "fg:ansired bold",

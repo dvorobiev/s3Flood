@@ -397,3 +397,48 @@ class TestPanelsDoNotCollapse:
         loaded_boundary = self._right_frame_left_border_col(app, cols)
 
         assert loading_boundary == loaded_boundary == cols // 2
+
+
+class TestUniformRowWidth:
+    def test_rows_with_different_meta_length_have_same_text_length(self):
+        panel = Panel(title="t", rows=[
+            Row(name="..", is_dir=True),  # meta пустая
+            Row(name="a.bin", size=1024, meta="2026-07-01 10:00"),  # 16 симв.
+            Row(name="b.bin", size=1, meta="⊙ latest"),  # короткая метка
+        ], selection=0)
+        lines = render_panel_lines(panel, width=60, focused=True)
+        # первая строка результата — заголовки колонок, дальше — по одной на Row
+        row_lengths = {len(text.rstrip("\n")) for _s, text in lines[1:]}
+        assert row_lengths == {60}
+
+    def test_header_row_has_same_length_as_data_rows(self):
+        panel = Panel(title="t", rows=[Row(name="..", is_dir=True)], selection=0)
+        lines = render_panel_lines(panel, width=50, focused=True)
+        assert len(lines[0][1].rstrip("\n")) == 50
+        assert len(lines[1][1].rstrip("\n")) == 50
+
+    def test_selected_dotdot_same_width_as_selected_row_with_long_meta(self):
+        panel_dotdot = Panel(title="t", rows=[Row(name="..", is_dir=True)], selection=0)
+        panel_dated = Panel(title="t", rows=[
+            Row(name="a.bin", size=1, meta="2026-07-01 10:00")
+        ], selection=0)
+        len_dotdot = len(render_panel_lines(panel_dotdot, 60, True)[1][1].rstrip("\n"))
+        len_dated = len(render_panel_lines(panel_dated, 60, True)[1][1].rstrip("\n"))
+        assert len_dotdot == len_dated == 60
+
+
+class TestNoCursorStyleWhenUnfocused:
+    def test_unfocused_selection_has_no_cursor_style(self):
+        panel = Panel(title="t", rows=[
+            Row(name="a.bin", size=1), Row(name="b.bin", size=1),
+        ], selection=0)
+        lines = render_panel_lines(panel, width=40, focused=False)
+        sel_style = [s for s, t in lines if "a.bin" in t][0]
+        assert "cursor" not in sel_style
+        assert "selected" not in sel_style
+
+    def test_focused_selection_still_gets_selected_style(self):
+        panel = Panel(title="t", rows=[Row(name="a.bin", size=1)], selection=0)
+        lines = render_panel_lines(panel, width=40, focused=True)
+        sel_style = [s for s, t in lines if "a.bin" in t][0]
+        assert "selected" in sel_style
