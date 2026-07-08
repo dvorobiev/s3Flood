@@ -24,6 +24,11 @@ s3flood-windows-portable-*.zip
 # Local configs (не коммитим реальные креденшлы)
 config.local.yaml
 *.local.yaml
+config.real.yaml
+config.tape.yaml
+
+# Настройки приложения (путь к датасету — локальны для рабочей папки)
+.s3flood.yml
 
 # OS/editor
 .DS_Store
