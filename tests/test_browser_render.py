@@ -344,6 +344,21 @@ class TestOuterDoubleFrame:
         assert body_row[cols - 1].char == "║"
 
 
+class TestFocusAccentStyle:
+    def test_focused_style_brighter_than_default_frame(self, tmp_path):
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=DummyOutput(),
+        )
+        rules = dict(app.app.style.style_rules)
+        assert "ansibrightcyan" in rules["panelfocus frame.border"]
+        assert "ansibrightcyan" in rules["panelfocus frame.label"]
+        assert "ansibrightcyan" in rules["panelfocus panel.summary"]
+        # неактивная рамка/каталоги — без изменений
+        assert rules["frame.border"] == "fg:#585858"
+        assert rules["row.dir"] == "fg:#00d7ff"
+
+
 class TestPanelsDoNotCollapse:
     """Воспроизводит баг: ширина панели не должна зависеть от того, что в ней
     временно отрендерено (loading-заглушка короче полного списка).

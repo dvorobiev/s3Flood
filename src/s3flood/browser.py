@@ -418,10 +418,10 @@ class BucketBrowserApp:
                 "progress.hint": "fg:#6c6c6c",
                 "frame.border": "fg:#585858",
                 "frame.label": "fg:#6c6c6c",
-                "panelfocus frame.border": "fg:#00d7ff bold",
-                "panelfocus frame.label": "fg:#00d7ff bold",
+                "panelfocus frame.border": "fg:ansibrightcyan bold",
+                "panelfocus frame.label": "fg:ansibrightcyan bold",
                 "panel.summary": "fg:#6c6c6c",
-                "panelfocus panel.summary": "fg:#00d7ff",
+                "panelfocus panel.summary": "fg:ansibrightcyan bold",
                 "outer.border": "fg:ansiwhite",
             }),
         )
