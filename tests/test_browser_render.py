@@ -469,3 +469,49 @@ class TestReloadLocalResetsSelection:
         app.local_path = tmp_path
         app.reload_local()
         assert app.left.selection == 0
+
+
+class TestGoingUpSelectsPreviousDir:
+    def test_backspace_selects_dir_we_came_from(self, tmp_path):
+        (tmp_path / "aaa").mkdir()
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "zzz").mkdir()
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path / "sub",
+            input=DummyInput(), output=DummyOutput(),
+        )
+        app.focus_right = False
+        app._key_back(None)
+        assert app.local_path == tmp_path.resolve()
+        selected = app.left.selected()
+        assert selected is not None and selected.name == "sub/"
+
+    def test_enter_on_dotdot_selects_dir_we_came_from(self, tmp_path):
+        (tmp_path / "aaa").mkdir()
+        (tmp_path / "sub").mkdir()
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path / "sub",
+            input=DummyInput(), output=DummyOutput(),
+        )
+        app.focus_right = False
+        app.left.selection = 0  # ".." — первая строка
+        app._key_enter(None)
+        assert app.local_path == tmp_path.resolve()
+        selected = app.left.selected()
+        assert selected is not None and selected.name == "sub/"
+
+    def test_entering_subdir_still_resets_to_first_row(self, tmp_path):
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / "inner").mkdir()
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=DummyOutput(),
+        )
+        app.focus_right = False
+        # найти строку "sub/" и встать на неё
+        idx = next(i for i, r in enumerate(app.left.rows) if r.name == "sub/")
+        app.left.selection = idx
+        app._key_enter(None)
+        assert app.local_path == sub.resolve()
+        assert app.left.selection == 0

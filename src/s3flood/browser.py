@@ -549,11 +549,12 @@ class BucketBrowserApp:
             return
         if not self.focus_right:
             if row.is_dir and isinstance(row.payload, Path):
+                old_path = self.local_path
                 self.local_path = row.payload.resolve()
-                self.reload_local()
-            elif row.name == "..":
-                self.local_path = self.local_path.parent
-                self.reload_local()
+                if row.name == "..":
+                    self.reload_local(select_name=old_path.name + "/")
+                else:
+                    self.reload_local()
             return
         # бакет-панель
         if self.right.mode == "buckets":
@@ -583,8 +584,9 @@ class BucketBrowserApp:
 
     def _key_back(self, event) -> None:
         if not self.focus_right:
+            old_path = self.local_path
             self.local_path = self.local_path.parent
-            self.reload_local()
+            self.reload_local(select_name=old_path.name + "/")
         elif self.right.mode == "versions":
             self.versions_key = None
             self.right.mode = "list"
@@ -712,10 +714,15 @@ class BucketBrowserApp:
         except Exception:
             pass
 
-    def reload_local(self) -> None:
+    def reload_local(self, select_name: str | None = None) -> None:
         self.left.rows = build_local_rows(self.local_path)
         self.left.title = str(self.local_path)
         self.left.selection = 0
+        if select_name is not None:
+            for idx, row in enumerate(self.left.rows):
+                if row.name == select_name:
+                    self.left.selection = idx
+                    break
         self.left.clamp()
 
     async def _ensure_versioning_status(self) -> None:
