@@ -12,6 +12,8 @@ from s3flood.metrics import (
     read_ops_csv,
     summarize_latencies,
     summarize_speeds,
+    summary_speed_stats,
+    timeline_speeds,
 )
 
 
@@ -224,9 +226,6 @@ class TestMetricsCsvWriter:
         writer = MetricsCsvWriter(str(tmp_path / "m.csv"))
         writer.close()
         writer.close()
-
-
-from s3flood.metrics import summary_speed_stats, timeline_speeds
 
 
 class TestTimelineSpeeds:

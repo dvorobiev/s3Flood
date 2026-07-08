@@ -1,4 +1,13 @@
+import pytest
+from prompt_toolkit.data_structures import Size
+from prompt_toolkit.input import DummyInput
+from prompt_toolkit.layout.containers import WritePosition
+from prompt_toolkit.layout.mouse_handlers import MouseHandlers
+from prompt_toolkit.layout.screen import Screen
+from prompt_toolkit.output import DummyOutput
+
 from s3flood.browser import (
+    BucketBrowserApp,
     Panel,
     Row,
     build_local_rows,
@@ -189,3 +198,84 @@ class TestRenderPanelLines:
         b_style, b_text = [(s, t) for s, t in lines if "b.bin" in t][0]
         assert "*" in a_text and "marked" in a_style
         assert "*" not in b_text
+
+
+class TestBucketsPanelSummary:
+    def test_counts_buckets_without_size(self):
+        panel = Panel(title="t", mode="buckets", rows=[
+            Row(name="bucket-a", is_dir=True),
+            Row(name="bucket-b", is_dir=True),
+            Row(name="bucket-c", is_dir=True),
+        ])
+        s = panel_summary(panel)
+        assert "3" in s and "бакет" in s
+        assert "B" not in s and "KB" not in s
+
+    def test_ignores_parent_row(self):
+        panel = Panel(title="t", mode="buckets", rows=[
+            Row(name="..", is_dir=True),
+            Row(name="bucket-a", is_dir=True),
+        ])
+        assert "1" in panel_summary(panel)
+
+
+class _FixedSizeOutput(DummyOutput):
+    """DummyOutput с настраиваемой шириной терминала (для теста реального рендера)."""
+
+    def __init__(self, columns: int, rows: int = 40):
+        self.columns = columns
+        self.rows = rows
+
+    def get_size(self) -> Size:
+        return Size(rows=self.rows, columns=self.columns)
+
+
+class TestPanelWidthRealRender:
+    """Реальный рендер через prompt_toolkit-контейнер (не только чистая функция).
+
+    Проверяет, что после оборачивания панелей в Frame последний символ длинной
+    строки не обрезается рамкой: _panel_width() должен учитывать border
+    Frame (по 1 колонке слева и справа на панель), а не только отсутствие
+    разделителя между панелями.
+    """
+
+    @pytest.mark.parametrize("cols", [78, 80, 100, 120])
+    def test_last_char_of_long_row_not_clipped(self, tmp_path, cols):
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=_FixedSizeOutput(cols),
+        )
+        app.right.loading = False
+        app.right.mode = "list"
+        app.right.rows = [Row(name="a.bin", size=1024, meta="2026-07-01 10:00")]
+        app.right.selection = 0
+
+        panel_width = app._panel_width()
+        expected_lines = [
+            text for _style, text in render_panel_lines(app.right, panel_width, True)
+        ]
+        expected_row = expected_lines[1].rstrip("\n")  # 0 — заголовки колонок
+
+        screen = Screen()
+        write_position = WritePosition(xpos=0, ypos=0, width=cols, height=40)
+        app.app.layout.container.write_to_screen(
+            screen, MouseHandlers(), write_position, "", False, 0
+        )
+        screen.draw_all_floats()
+
+        # Обе панели используют одну и ту же ширину контента (_panel_width),
+        # поэтому левый Frame целиком занимает panel_width + 2 (границы) колонок,
+        # правый Frame начинается сразу за ним (разделителя между ними нет).
+        left_frame_total = panel_width + 2
+        right_content_start = left_frame_total + 1
+        row_chars = screen.data_buffer[2]  # строка 0 — верх рамки/заголовок,
+        # строка 1 — заголовки колонок, строка 2 — первая строка данных
+        actual_row = "".join(
+            row_chars[x].char for x in range(right_content_start,
+                                              right_content_start + panel_width)
+        )
+
+        assert actual_row == expected_row, (
+            f"cols={cols}: последний символ строки обрезан рамкой "
+            f"(expected={expected_row!r}, actual={actual_row!r})"
+        )

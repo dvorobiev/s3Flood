@@ -72,6 +72,9 @@ def panel_summary(panel: Panel) -> str:
     """Сводная строка панели: всего объектов/размер или выделенное."""
     if panel.loading:
         return ""
+    if panel.mode == "buckets":
+        count = len([r for r in panel.rows if r.name != ".."])
+        return f" {count} бакетов"
     files = [r for r in panel.rows if not r.is_dir and r.name != ".."]
     marked = [r for r in files if r.marked]
     if marked:
@@ -372,7 +375,6 @@ class BucketBrowserApp:
                 "row.selected": "reverse",
                 "row.cursor": "underline",
                 "row.marked": "fg:ansiyellow bold",
-                "separator": "fg:#585858",
                 "status": "",
                 "status.error": "fg:ansired bold",
                 "status.confirm": "fg:ansiyellow bold",
@@ -408,7 +410,11 @@ class BucketBrowserApp:
             cols = self.app.output.get_size().columns
         except Exception:
             cols = 80
-        return max(cols // 2 - 1, 20)
+        # Каждая панель обёрнута в Frame — рамка съедает по 1 колонке слева
+        # и справа (2 колонки на панель). Разделителя между панелями больше
+        # нет, поэтому на панель приходится ровно половина cols минус её
+        # собственная рамка.
+        return max(cols // 2 - 2, 20)
 
     def _fragments(self, panel: Panel, focused: bool):
         return render_panel_lines(panel, self._panel_width(), focused)
