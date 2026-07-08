@@ -30,6 +30,9 @@ config.tape.yaml
 # Настройки приложения (путь к датасету — локальны для рабочей папки)
 .s3flood.yml
 
+# Враппер-скрипт, генерируется install.sh
+/s3flood
+
 # OS/editor
 .DS_Store
 *.code-workspace
