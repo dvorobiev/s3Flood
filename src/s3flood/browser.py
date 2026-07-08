@@ -22,6 +22,7 @@ from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import (
     ConditionalContainer,
+    Dimension,
     Float,
     FloatContainer,
     HSplit,
@@ -324,6 +325,7 @@ class BucketBrowserApp:
                 ]),
                 title=lambda: f" {self.left.title} ",
             )],
+            width=Dimension(weight=1),
             style=lambda: "class:panelfocus" if not self.focus_right else "",
         )
         right_frame = HSplit(
@@ -334,6 +336,7 @@ class BucketBrowserApp:
                 ]),
                 title=lambda: f" {self.right.title} ",
             )],
+            width=Dimension(weight=1),
             style=lambda: "class:panelfocus" if self.focus_right else "",
         )
         body = VSplit([left_frame, right_frame])

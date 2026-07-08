@@ -306,3 +306,40 @@ class TestPanelWidthRealRender:
             f"cols={cols}: последний символ строки обрезан рамкой "
             f"(expected={expected_row!r}, actual={actual_row!r})"
         )
+
+
+class TestPanelsDoNotCollapse:
+    """Воспроизводит баг: ширина панели не должна зависеть от того, что в ней
+    временно отрендерено (loading-заглушка короче полного списка).
+    """
+
+    def _right_frame_left_border_col(self, app, cols: int) -> int:
+        screen = Screen()
+        write_position = WritePosition(xpos=0, ypos=0, width=cols, height=40)
+        app.app.layout.container.write_to_screen(
+            screen, MouseHandlers(), write_position, "", False, 0
+        )
+        screen.draw_all_floats()
+        row = screen.data_buffer[0]
+        for x in range(1, cols):
+            if row[x].char == "┌":
+                return x
+        raise AssertionError("правая рамка не найдена в верхней строке")
+
+    def test_loading_and_loaded_give_same_boundary(self, tmp_path):
+        cols = 100
+        app = BucketBrowserApp(
+            bucket="b", endpoint="h", env={}, start_dir=tmp_path,
+            input=DummyInput(), output=_FixedSizeOutput(cols),
+        )
+        # состояние сразу после старта — правая панель ещё loading
+        assert app.right.loading is True
+        loading_boundary = self._right_frame_left_border_col(app, cols)
+
+        app.right.loading = False
+        app.right.mode = "list"
+        app.right.rows = [Row(name="a.bin", size=1024, meta="2026-07-01 10:00")]
+        app.right.selection = 0
+        loaded_boundary = self._right_frame_left_border_col(app, cols)
+
+        assert loading_boundary == loaded_boundary == cols // 2
